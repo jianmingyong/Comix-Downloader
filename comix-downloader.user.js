@@ -1,6 +1,9 @@
 // ==UserScript==
 // @name         Comix Downloader
 // @namespace    https://github.com/jianmingyong/Comix-Downloader
+// @source       https://github.com/jianmingyong/Comix-Downloader
+// @updateURL    https://github.com/jianmingyong/Comix-Downloader/raw/refs/heads/master/comix-downloader.user.js
+// @downloadURL  https://github.com/jianmingyong/Comix-Downloader/raw/refs/heads/master/comix-downloader.user.js
 // @version      1.0.0
 // @description  Try to annoy comix as much as possible by downloading everything.
 // @author       Yong Jian Ming
