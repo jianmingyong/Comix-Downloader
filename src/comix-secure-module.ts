@@ -5,10 +5,14 @@
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 
-import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios';
-import { AsyncFunction, DEFAULT_FETCH_TIMEOUT, DEFAULT_WAIT_TIMEOUT } from './constants'
-import { querySelectorWaitUntil } from './document-extensions'
-import { urlParamsToObject } from './url-extensions';
+import axios, { type AxiosInstance, type AxiosRequestConfig } from "axios";
+import {
+    AsyncFunction,
+    DEFAULT_FETCH_TIMEOUT,
+    DEFAULT_WAIT_TIMEOUT,
+} from "./constants";
+import { querySelectorWaitUntil } from "./document-extensions";
+import { urlParamsToObject } from "./url-extensions";
 
 export class ComixSecureModule {
     private static canvasToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -17,79 +21,97 @@ export class ComixSecureModule {
     private descrambler: Function[] = [];
 
     public async initialize(): Promise<void> {
-        const mainModuleElement = (await querySelectorWaitUntil<HTMLScriptElement>(
-            'head > script[type="module"][src*="main"]',
-            (element) => element ? true : false,
-            AbortSignal.timeout(DEFAULT_WAIT_TIMEOUT)
-        ))!;
+        const mainModuleElement =
+            (await querySelectorWaitUntil<HTMLScriptElement>(
+                'head > script[type="module"][src*="main"]',
+                (element) => (element ? true : false),
+                AbortSignal.timeout(DEFAULT_WAIT_TIMEOUT)
+            ))!;
 
         const mainModuleURL = mainModuleElement.src;
 
         const mainModuleResponse = await fetch(mainModuleURL, {
             cache: "no-cache",
-            signal: AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT)
+            signal: AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
         });
 
         if (!mainModuleResponse.ok) {
-            throw new Error(`Main module returned ${mainModuleResponse.status.toString()}: ${mainModuleResponse.statusText}`);
+            throw new Error(
+                `Main module returned ${mainModuleResponse.status.toString()}: ${mainModuleResponse.statusText}`
+            );
         }
 
         const mainModuleContents = await mainModuleResponse.text();
-        const secureModuleFileSearch = /(secure-[A-Za-z0-9-_]+?\.js)/.exec(mainModuleContents);
+        const secureModuleFileSearch = /(secure-[A-Za-z0-9-_]+?\.js)/.exec(
+            mainModuleContents
+        );
 
         if (!secureModuleFileSearch) {
-            throw new Error('Secure module not found');
+            throw new Error("Secure module not found");
         }
 
-        const secureModuleUrl = mainModuleURL.substring(0, mainModuleURL.lastIndexOf('/') + 1) + secureModuleFileSearch[0];
-        const moduleFunctions = await import(secureModuleUrl) as Record<string, unknown>;
+        const secureModuleUrl =
+            mainModuleURL.substring(0, mainModuleURL.lastIndexOf("/") + 1) +
+            secureModuleFileSearch[0];
+        const moduleFunctions = (await import(secureModuleUrl)) as Record<
+            string,
+            unknown
+        >;
 
-        console.log('Found Secure Module:', moduleFunctions);
+        console.log("Found Secure Module:", moduleFunctions);
 
         let foundInterceptors = false;
 
         Object.values(moduleFunctions).forEach((fn) => {
-            if (typeof fn !== 'function') return;
+            if (typeof fn !== "function") return;
 
             try {
                 if (!foundInterceptors) {
                     if (fn.length >= 1 && !(fn instanceof AsyncFunction)) {
+                        let foundRequest = false,
+                            foundResponse = false;
 
                         fn({
                             interceptors: {
                                 request: {
                                     use: () => {
-                                        foundInterceptors = true;
-                                    }
+                                        foundRequest = true;
+                                    },
                                 },
                                 response: {
                                     use: () => {
-                                        foundInterceptors = true;
-                                    }
-                                }
-                            }
+                                        foundResponse = true;
+                                    },
+                                },
+                            },
                         });
 
-                        if (foundInterceptors) {
-
+                        if (foundRequest && foundResponse) {
                             fn(this.axios);
+                            foundInterceptors = true;
                         }
                     }
                 }
-            } catch { /* empty */ }
+            } catch {
+                /* empty */
+            }
 
             try {
                 if (fn.length >= 1 && fn instanceof AsyncFunction) {
                     this.descrambler.push(fn);
                 } else if (fn.length >= 1) {
-                    const test = fn('about:blank') as unknown;
+                    const test = fn("about:blank") as unknown;
 
                     if (test instanceof Promise) {
-                        test.catch(() => { /* empty */ });
+                        test.catch(() => {
+                            /* empty */
+                        });
                         this.descrambler.push(fn);
                     }
                 }
-            } catch { /* empty */ }
+            } catch {
+                /* empty */
+            }
         });
 
         if (!foundInterceptors) {
@@ -98,20 +120,31 @@ export class ComixSecureModule {
             throw new Error("Unable to find descrambler function");
         }
 
-        console.log("Injected custom function completed. Now you can use them to do whatever you want.");
+        console.log(
+            "Injected custom function completed. Now you can use them to do whatever you want."
+        );
     }
 
-    public async fetchJsonWithAxiosInterceptors(url: string, config?: AxiosRequestConfig): Promise<unknown> {
+    public async fetchJsonWithAxiosInterceptors(
+        url: string,
+        config?: AxiosRequestConfig
+    ): Promise<unknown> {
         const inputUrl = new URL(url);
 
-        return (await this.axios(`${inputUrl.origin}${inputUrl.pathname}`, {
-            ...config,
-            method: config?.method ?? 'GET',
-            params: urlParamsToObject(url),
-        })).data
+        return (
+            await this.axios(`${inputUrl.origin}${inputUrl.pathname}`, {
+                ...config,
+                method: config?.method ?? "GET",
+                params: urlParamsToObject(url),
+            })
+        ).data;
     }
 
-    public async descrambleImage(url: string, canvas: HTMLCanvasElement, signal?: AbortSignal | null): Promise<string> {
+    public async descrambleImage(
+        url: string,
+        canvas: HTMLCanvasElement,
+        signal?: AbortSignal
+    ): Promise<string> {
         for (const descramblerFunction of this.descrambler) {
             // This assume the api fetch and draw into the canvas directly.
             try {
@@ -120,22 +153,33 @@ export class ComixSecureModule {
                 if (output) {
                     throw new Error("Unknown scrambled mode");
                 }
-            } catch { /* empty */ }
+            } catch {
+                /* empty */
+            }
 
             // This assume the api fetch the image and return an object that you must handle.
             try {
                 const output = await descramblerFunction(url, signal);
 
-                async function handleBlob(blob: Blob, canvas: HTMLCanvasElement): Promise<void> {
-                    const image: HTMLImageElement = await new Promise((resolve, reject) => {
-                        const image = new Image();
-                        image.src = URL.createObjectURL(blob);
-                        image.onload = () => { resolve(image); };
-                        image.onerror = (_e, _s, _l, _c, error) => { reject(error ?? new Error("Image load error")); };
-                    });
+                async function handleBlob(
+                    blob: Blob,
+                    canvas: HTMLCanvasElement
+                ): Promise<void> {
+                    const image: HTMLImageElement = await new Promise(
+                        (resolve, reject) => {
+                            const image = new Image();
+                            image.src = URL.createObjectURL(blob);
+                            image.onload = () => {
+                                resolve(image);
+                            };
+                            image.onerror = (_e, _s, _l, _c, error) => {
+                                reject(error ?? new Error("Image load error"));
+                            };
+                        }
+                    );
 
                     URL.revokeObjectURL(image.src);
-                    const ctx = canvas.getContext('2d');
+                    const ctx = canvas.getContext("2d");
                     ctx?.drawImage(image, 0, 0);
                 }
 
@@ -158,7 +202,9 @@ export class ComixSecureModule {
                 } else {
                     throw new Error("Unknown scrambled mode");
                 }
-            } catch { /* empty */ }
+            } catch {
+                /* empty */
+            }
         }
 
         return ComixSecureModule.canvasToDataURL.call(canvas);

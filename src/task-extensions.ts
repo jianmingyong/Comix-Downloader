@@ -1,9 +1,9 @@
-type Task = () => Promise<void>;
+type Task<T> = () => Promise<T>;
 
-export function runAllTasks(tasks: Task[], concurrency: number) {
+export function runAllTasks<T>(tasks: Task<T>[], concurrency: number) {
     return new Promise((resolve, reject) => {
         let counter = 0;
-        const runningTasks: Promise<void>[] = [];
+        const runningTasks: Promise<T>[] = [];
 
         for (let i = 0; i < Math.min(concurrency, tasks.length); i++) {
             runPromise();
@@ -21,4 +21,13 @@ export function runAllTasks(tasks: Task[], concurrency: number) {
             }
         }
     });
+}
+
+export function createTask<T>(task: Task<T>, signal?: AbortSignal): Task<T> {
+    return () => {
+        return new Promise((resolve, reject) => {
+            signal?.throwIfAborted();
+            task().then(resolve).catch(reject);
+        });
+    };
 }

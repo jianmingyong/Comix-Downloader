@@ -1,8 +1,4 @@
-type QueryValue =
-    | string
-    | boolean
-    | QueryObject
-    | QueryValue[];
+type QueryValue = string | boolean | QueryObject | QueryValue[];
 
 interface QueryObject {
     [key: string]: QueryValue;
@@ -36,11 +32,7 @@ export function urlParamsToObject(url: string): QueryObject {
             continue;
         }
 
-        insert(
-            result,
-            path,
-            standaloneParams.has(rawKey) ? true : value,
-        );
+        insert(result, path, standaloneParams.has(rawKey) ? true : value);
     }
 
     return result;
@@ -49,7 +41,7 @@ export function urlParamsToObject(url: string): QueryObject {
 function insert(
     root: QueryObject,
     path: string[],
-    value: string | boolean,
+    value: string | boolean
 ): void {
     let current: QueryObject | QueryValue[] = root;
 
@@ -68,8 +60,7 @@ function insert(
                 return;
             }
 
-            const child: QueryObject | QueryValue[] =
-                next === "" ? [] : {};
+            const child: QueryObject | QueryValue[] = next === "" ? [] : {};
 
             current.push(child);
             current = child;

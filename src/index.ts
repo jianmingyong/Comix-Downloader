@@ -11,7 +11,9 @@ async function main(): Promise<void> {
         currentPath = location.pathname;
 
         if (location.pathname.startsWith("/title/")) {
-            inject().catch((error) => { console.log(error) });
+            inject().catch((error) => {
+                console.log(error);
+            });
         }
     }
 
@@ -30,12 +32,12 @@ async function main(): Promise<void> {
 
     GM_addElement("script", {
         src: "https://kit.fontawesome.com/e5e217aee3.js",
-        crossorigin: "anonymous"
+        crossorigin: "anonymous",
     });
 
     GM_addElement("script", {
         src: "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
-        crossorigin: "anonymous"
+        crossorigin: "anonymous",
     });
 
     urlChanged();
@@ -44,27 +46,35 @@ async function main(): Promise<void> {
     async function inject(): Promise<void> {
         const rateElement = (await querySelectorWaitUntil<HTMLDivElement>(
             "div.mpage__poster-actions",
-            (element) => element ? (element.querySelector("div.mpage__rate-stack") ? true : false) : false,
+            (element) =>
+                element
+                    ? element.querySelector("div.mpage__rate-stack")
+                        ? true
+                        : false
+                    : false,
             AbortSignal.timeout(DEFAULT_WAIT_TIMEOUT)
         ))!;
 
-        rateElement.insertBefore(createElement("button", {
-            type: "button",
-            class: ["btn", "btn--soft"],
-            title: "Download",
-            onclick: () => {
-                const downloader = new ComixDownloader(module);
-                downloader.show();
-            },
-            children: [
-                createElement("i", {
-                    class: ["fa-solid", "fa-download"]
-                }),
-                createElement("span", {
-                    textContent: "Download"
-                })
-            ]
-        }), rateElement.querySelector("div.mpage__rate-stack"));
+        rateElement.insertBefore(
+            createElement("button", {
+                type: "button",
+                class: ["btn", "btn--soft"],
+                title: "Download",
+                onclick: () => {
+                    const downloader = new ComixDownloader(module);
+                    downloader.show();
+                },
+                children: [
+                    createElement("i", {
+                        class: ["fa-solid", "fa-download"],
+                    }),
+                    createElement("span", {
+                        textContent: "Download",
+                    }),
+                ],
+            }),
+            rateElement.querySelector("div.mpage__rate-stack")
+        );
     }
 }
 

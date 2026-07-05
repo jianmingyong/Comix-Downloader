@@ -6,4 +6,6 @@ export const RETRY_WAIT_TIME = 5 * 1000;
 export const CHAPTER_DOWNLOAD_CONCURRENCY = 4;
 export const PAGE_DOWNLOAD_CONCURRENCY = 12;
 
-export const AsyncFunction = async function () { /* empty */ }.constructor;
+export const AsyncFunction = async function () {
+    /* empty */
+}.constructor;
