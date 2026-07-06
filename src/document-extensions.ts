@@ -3,7 +3,7 @@ type ElementCondition = (element: Element | null) => boolean;
 export function querySelectorWaitUntil<E extends Element = Element>(
     selectors: string,
     conditions?: ElementCondition | null,
-    signal?: AbortSignal | number | null
+    signal?: AbortSignal | number
 ): Promise<E | null> {
     conditions ??= (element) => (element ? true : false);
 
@@ -17,7 +17,7 @@ export function querySelectorWaitUntil<E extends Element = Element>(
         function findElement(
             selectors: string,
             conditions: ElementCondition,
-            signal: AbortSignal | null
+            signal?: AbortSignal
         ) {
             if (signal?.aborted) {
                 if (signal.reason instanceof Error) {

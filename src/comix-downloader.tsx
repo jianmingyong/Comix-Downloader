@@ -1,51 +1,20 @@
 import { createRoot } from "react-dom/client";
-import { createElement } from "./document-extensions";
-import { ComixDownloaderWindow } from "./downloader-ui/comix-downloader-window";
+import type {
+    ComixChapterItem,
+    ComixChapterJson,
+    ComixChapterPageItem,
+    ComixChapterPageJson,
+} from "./comix-api-model";
 import type { ComixSecureModule } from "./comix-secure-module";
 import {
     DEFAULT_FETCH_TIMEOUT,
     DEFAULT_MAX_RETRY,
     PAGE_DOWNLOAD_CONCURRENCY,
 } from "./constants";
+import { createElement } from "./document-extensions";
 import { sanitizeFilename } from "./file-extensions";
-import JSZip from "jszip";
 import { runAllTasks } from "./task-extensions";
-
-interface ComixChapterJson {
-    items?: ComixChapterItem[];
-    meta?: {
-        from: number;
-        hasNext: boolean;
-        hasPrev: boolean;
-        lastPage: number;
-        page: number;
-        perPage: number;
-        to: number;
-        total: number;
-    };
-}
-
-interface ComixChapterItem {
-    createdAtFormatted: string;
-    creator?: {
-        hashId: string;
-        id: number;
-        name: string;
-        url: string;
-        username: string;
-    } | null;
-    group?: { id: number; name: string } | null;
-    groupId?: number | null;
-    id: number;
-    isOfficial: boolean;
-    language: string;
-    mangaId: number;
-    name: string;
-    number: number;
-    url: string;
-    volume: number;
-    votes: number;
-}
+import { ComixDownloaderWindow } from "./downloader-ui/comix-downloader-window";
 
 export class ComixChapter {
     private _id: number;
@@ -54,7 +23,6 @@ export class ComixChapter {
     private _title: string;
     private _isOfficial: boolean;
     private _group: string | null;
-    private _user: string | null;
     private _outputFileName: string;
 
     private module: ComixSecureModule;
@@ -80,19 +48,20 @@ export class ComixChapter {
             outputFileName += `[${item.group.name}] `;
         } else if (item.isOfficial) {
             outputFileName += "[Official] ";
-        }
-
-        if (item.creator?.name) {
+        } else if (item.creator?.name) {
             outputFileName += `[${item.creator.name}] `;
         }
 
         this._id = item.id;
         this._volume = item.volume;
         this._chapter = item.number;
-        this._title = item.name;
+        this._title = item.name ?? "";
         this._isOfficial = item.isOfficial;
-        this._group = item.group?.name ?? (item.isOfficial ? "Official" : null);
-        this._user = item.creator?.name ?? null;
+        this._group =
+            item.group?.name ??
+            (item.isOfficial ? "Official" : null) ??
+            item.creator?.name ??
+            null;
         this._outputFileName = sanitizeFilename(`${outputFileName.trim()}.cbz`);
     }
 
@@ -120,32 +89,21 @@ export class ComixChapter {
         return this._group;
     }
 
-    public get user(): string | null {
-        return this._user;
-    }
-
     public get outputFileName(): string {
         return this._outputFileName;
     }
 
     public createDownloadTask(
+        signal: AbortSignal,
         progressCallback: ComixDownloadProgressCallback
     ): ComixDownloadTask {
-        return new ComixDownloadTask(this.module, this, progressCallback);
+        return new ComixDownloadTask(
+            this.module,
+            this,
+            signal,
+            progressCallback
+        );
     }
-}
-
-interface ComixChapterPageJson {
-    pages: {
-        items: ComixChapterPageItem[];
-    };
-}
-
-interface ComixChapterPageItem {
-    width: number;
-    height: number;
-    url: string;
-    s?: number;
 }
 
 interface ComixDownloadProgress {
@@ -155,10 +113,10 @@ interface ComixDownloadProgress {
 
 type ComixDownloadProgressCallback = (progress: ComixDownloadProgress) => void;
 
-class ComixDownloadTask {
+export class ComixDownloadTask {
     private module: ComixSecureModule;
     private chapter: ComixChapter;
-    private abortController: AbortController;
+    private signal: AbortSignal;
 
     private task: ComixPageDownloadTask[] = [];
     private done: number = 0;
@@ -168,39 +126,41 @@ class ComixDownloadTask {
     public constructor(
         module: ComixSecureModule,
         chapter: ComixChapter,
+        signal: AbortSignal,
         progressCallback: ComixDownloadProgressCallback
     ) {
         this.module = module;
         this.chapter = chapter;
-        this.abortController = new AbortController();
+        this.signal = signal;
         this.progressCallback = progressCallback;
     }
 
-    public async start(): Promise<JSZip> {
+    public async start(): Promise<[string, typeof JSZip]> {
+        this.signal.throwIfAborted();
+
         const json = (await this.module.fetchJsonWithAxiosInterceptors(
             `https://comix.to/api/v1/chapters/${this.chapter.id}`,
             {
                 signal: AbortSignal.any([
                     AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
-                    this.abortController.signal,
+                    this.signal,
                 ]),
             }
         )) as ComixChapterPageJson;
 
         const zip = new JSZip();
 
-        json.pages.items.forEach((item, index) => {
+        json?.pages?.items?.forEach((item, index) => {
             this.task.push(
                 new ComixPageDownloadTask(
                     this.module,
                     item,
                     index,
                     zip,
-                    this.abortController.signal,
+                    this.signal,
                     () => {
-                        this.done++;
                         this.progressCallback({
-                            done: this.done,
+                            done: ++this.done,
                             total: this.task.length,
                         });
                     }
@@ -208,16 +168,14 @@ class ComixDownloadTask {
             );
         });
 
+        this.progressCallback({ done: 0, total: this.task.length });
+
         await runAllTasks(
             this.task.map((t) => () => t.start()),
             PAGE_DOWNLOAD_CONCURRENCY
         );
 
-        return zip;
-    }
-
-    public stop() {
-        this.abortController.abort();
+        return [this.chapter.outputFileName, zip];
     }
 }
 
@@ -225,7 +183,7 @@ class ComixPageDownloadTask {
     private module: ComixSecureModule;
     private item: ComixChapterPageItem;
     private index: number;
-    private targetZipFile: JSZip;
+    private targetZipFile: typeof JSZip;
     private signal: AbortSignal;
     private doneCallback: Function;
 
@@ -235,7 +193,7 @@ class ComixPageDownloadTask {
         module: ComixSecureModule,
         item: ComixChapterPageItem,
         index: number,
-        targetZipFile: JSZip,
+        targetZipFile: typeof JSZip,
         signal: AbortSignal,
         doneCallback: Function
     ) {
@@ -249,8 +207,11 @@ class ComixPageDownloadTask {
 
     public async start(): Promise<void> {
         do {
+            this.signal.throwIfAborted();
+
             try {
                 if (this.item.s) {
+                    // Scrambled Pages
                     const canvas = document.createElement("canvas");
                     canvas.width = this.item.width;
                     canvas.height = this.item.height;
@@ -313,6 +274,11 @@ export class ComixDownloader {
 
     private module: ComixSecureModule;
     private overlay: HTMLElement | null = null;
+    private abortController: AbortController | null = null;
+
+    public get signal(): AbortSignal | null {
+        return this.abortController?.signal ?? null;
+    }
 
     public constructor(module: ComixSecureModule) {
         this.module = module;
@@ -320,11 +286,12 @@ export class ComixDownloader {
 
     public show() {
         this.createUI();
+        this.abortController = new AbortController();
     }
 
     public close() {
         if (!this.overlay) return;
-
+        this.abortController?.abort();
         document.body.removeChild(this.overlay);
         this.overlay = null;
     }
@@ -340,19 +307,18 @@ export class ComixDownloader {
         let page = 1;
 
         do {
-            const comixChapterList: ComixChapterJson | null =
-                (await this.module.fetchJsonWithAxiosInterceptors(
-                    `https://comix.to/api/v1/manga/${mangaId}/chapters?page=${page}&limit=100&order[number]=desc`
-                )) as ComixChapterJson;
+            const json = (await this.module.fetchJsonWithAxiosInterceptors(
+                `https://comix.to/api/v1/manga/${mangaId}/chapters?page=${page}&limit=100&order[number]=desc`
+            )) as ComixChapterJson;
 
-            console.log(comixChapterList);
+            console.log(json);
 
-            comixChapterList?.items?.forEach((item) => {
+            json?.items?.forEach((item) => {
                 chapterList.push(new ComixChapter(this.module, item));
             });
 
             page += 1;
-            hasMoreChapters = comixChapterList?.meta?.hasNext ?? false;
+            hasMoreChapters = json?.meta?.hasNext ?? false;
         } while (hasMoreChapters);
 
         return chapterList;

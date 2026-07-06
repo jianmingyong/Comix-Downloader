@@ -1,9 +1,21 @@
-import { useEffect, useState } from "react";
-import { ComixChapter, type ComixDownloader } from "../comix-downloader";
+import { useEffect, useMemo, useState } from "react";
+import {
+    ComixChapter,
+    ComixDownloadTask,
+    type ComixDownloader,
+} from "../comix-downloader";
+import { runAllTasks } from "../task-extensions";
+import { CHAPTER_DOWNLOAD_CONCURRENCY } from "../constants";
+import { sanitizeFilename, saveAs } from "../file-extensions";
 
 interface ChapterRange {
     min: number;
     max: number;
+}
+
+interface Progress {
+    done: number;
+    total: number;
 }
 
 export function ComixDownloaderWindow({
@@ -12,45 +24,145 @@ export function ComixDownloaderWindow({
     downloader: ComixDownloader;
 }) {
     const [chapterList, setChapterList] = useState<ComixChapter[]>();
-
-    const [availableGroups, setAvailableGroups] = useState<string[]>();
     const [selectedGroups, setSelectedGroups] = useState<Set<string>>(
         new Set()
     );
-
-    const [chapterRange, setChapterRange] = useState<ChapterRange>();
     const [selectedChapterRange, setSelectedChapterRange] =
         useState<ChapterRange>({ min: 0, max: 0 });
 
     const [isDownloading, setIsDownloading] = useState(false);
+    const [progress, setProgress] = useState<Record<number, Progress>>({});
+
+    const { groups, minChapterValue, maxChapterValue } = useMemo(() => {
+        if (!chapterList) {
+            return {
+                groups: null,
+                minChapterValue: null,
+                maxChapterValue: null,
+            };
+        } else {
+            const groups = new Set<string>();
+
+            chapterList.forEach((chapterList) => {
+                if (chapterList.group) {
+                    groups.add(chapterList.group);
+                }
+            });
+
+            const min = Math.min(...chapterList.map((v) => v.chapter));
+            const max = Math.max(...chapterList.map((v) => v.chapter));
+
+            setSelectedChapterRange({ min: min, max: max });
+
+            return {
+                groups: Array.from(groups).sort(),
+                minChapterValue: min,
+                maxChapterValue: max,
+            };
+        }
+    }, [chapterList]);
+
+    const chaptersToDownload = useMemo(() => {
+        if (!chapterList) {
+            return null;
+        } else {
+            return chapterList.filter(
+                (chapter) =>
+                    (chapter.group
+                        ? selectedGroups.has(chapter.group)
+                        : false) &&
+                    chapter.chapter >= selectedChapterRange.min &&
+                    chapter.chapter <= selectedChapterRange.max
+            );
+        }
+    }, [chapterList, selectedGroups, selectedChapterRange]);
+
+    const globalProgress = useMemo(() => {
+        return Object.values(progress).reduce(
+            (prev, curr) => {
+                return {
+                    done:
+                        prev.done +
+                        (curr.total > 0 && curr.done === curr.total ? 1 : 0),
+                    total: prev.total + 1,
+                };
+            },
+            { done: 0, total: 0 }
+        );
+    }, [progress]);
 
     useEffect(() => {
-        downloader
-            .fetchChapterList()
-            .then((list) => {
-                setChapterList(list);
-
-                const groups = new Set<string>();
-
-                list.forEach((chapterList) => {
-                    if (chapterList.group) {
-                        groups.add(chapterList.group);
-                    }
-                });
-
-                setAvailableGroups(Array.from(groups).sort());
-
-                const min = Math.min(...list.map((v) => v.chapter));
-                const max = Math.max(...list.map((v) => v.chapter));
-
-                setChapterRange({ min: min, max: max });
-                setSelectedChapterRange({ min: min, max: max });
-            })
-            .catch((error) => console.log(error));
+        downloader.fetchChapterList().then(setChapterList).catch(console.log);
     }, []);
 
     function onclickDownload() {
         setIsDownloading(true);
+
+        const tasks: ComixDownloadTask[] = [];
+        const progress: Record<number, Progress> = {};
+
+        chaptersToDownload?.forEach((chapter) => {
+            const id = chapter.id;
+            progress[id] = { done: 0, total: 0 };
+
+            tasks.push(
+                chapter.createDownloadTask(downloader.signal!, (progress) => {
+                    setProgress((value) => {
+                        return {
+                            ...value,
+                            [id]: {
+                                done: progress.done,
+                                total: progress.total,
+                            },
+                        };
+                    });
+                })
+            );
+        });
+
+        setProgress(progress);
+
+        const globalZip = new JSZip();
+
+        runAllTasks(
+            tasks.map((t) => () => t.start()),
+            CHAPTER_DOWNLOAD_CONCURRENCY
+        )
+            .then((zip) => {
+                const tasks: Array<() => Promise<void>> = [];
+
+                zip.forEach(([filename, zip]) => {
+                    tasks.push(() =>
+                        zip
+                            .generateAsync({
+                                type: "blob",
+                                compression: "DEFLATE",
+                                compressionOptions: { level: 9 },
+                            })
+                            .then((blob) => {
+                                globalZip.file(filename, blob);
+                            })
+                    );
+                });
+
+                return runAllTasks(tasks, 4);
+            })
+            .then(() => {
+                return globalZip.generateAsync({
+                    type: "blob",
+                    compression: "DEFLATE",
+                    compressionOptions: { level: 9 },
+                });
+            })
+            .then((blob) => {
+                const title =
+                    document.querySelector("h1.mpage__title")?.textContent;
+                saveAs(sanitizeFilename(`${title}.zip`), blob);
+            })
+            .catch(console.log)
+            .finally(() => {
+                setIsDownloading(false);
+            });
     }
 
     return (
@@ -75,50 +187,46 @@ export function ComixDownloaderWindow({
                             gap: "1rem",
                         }}
                     >
-                        {availableGroups ? (
-                            availableGroups.map((group, index) => (
-                                <div
-                                    key={`comix-downloader-group-${group}`}
-                                    style={{
-                                        display: "flex",
-                                        flexDirection: "row",
-                                        flexWrap: "nowrap",
-                                        justifyContent: "center",
-                                        alignItems: "center",
+                        {groups?.map((group, index) => (
+                            <div
+                                key={`comix-downloader-group-${group}`}
+                                style={{
+                                    display: "flex",
+                                    flexDirection: "row",
+                                    flexWrap: "nowrap",
+                                    justifyContent: "center",
+                                    alignItems: "center",
+                                }}
+                            >
+                                <input
+                                    id={`comix-downloader-group-${index}`}
+                                    type={"checkbox"}
+                                    value={group}
+                                    disabled={isDownloading}
+                                    onChange={(event) => {
+                                        if (event.target.checked) {
+                                            const newSet = new Set(
+                                                selectedGroups
+                                            );
+                                            newSet.add(group);
+                                            setSelectedGroups(newSet);
+                                        } else {
+                                            const newSet = new Set(
+                                                selectedGroups
+                                            );
+                                            newSet.delete(group);
+                                            setSelectedGroups(newSet);
+                                        }
                                     }}
+                                />
+                                <label
+                                    htmlFor={`comix-downloader-group-${index}`}
+                                    style={{ userSelect: "none" }}
                                 >
-                                    <input
-                                        id={`comix-downloader-group-${index}`}
-                                        type={"checkbox"}
-                                        value={group}
-                                        disabled={isDownloading}
-                                        onChange={(event) => {
-                                            if (event.target.checked) {
-                                                const newSet = new Set(
-                                                    selectedGroups
-                                                );
-                                                newSet.add(group);
-                                                setSelectedGroups(newSet);
-                                            } else {
-                                                const newSet = new Set(
-                                                    selectedGroups
-                                                );
-                                                newSet.delete(group);
-                                                setSelectedGroups(newSet);
-                                            }
-                                        }}
-                                    />
-                                    <label
-                                        htmlFor={`comix-downloader-group-${index}`}
-                                        style={{ userSelect: "none" }}
-                                    >
-                                        {group}
-                                    </label>
-                                </div>
-                            ))
-                        ) : (
-                            <span>Loading...</span>
-                        )}
+                                    {group}
+                                </label>
+                            </div>
+                        )) ?? <span>Loading...</span>}
                     </div>
                 </fieldset>
             </section>
@@ -147,21 +255,25 @@ export function ComixDownloaderWindow({
                             <input
                                 id={"comix-downloader-chapter-from"}
                                 type={"number"}
-                                min={chapterRange?.min ?? 0}
-                                max={chapterRange?.max ?? 0}
+                                min={minChapterValue ?? 0}
+                                max={maxChapterValue ?? 0}
                                 value={selectedChapterRange.min}
-                                disabled={!chapterRange || isDownloading}
+                                disabled={
+                                    !minChapterValue ||
+                                    !maxChapterValue ||
+                                    isDownloading
+                                }
                                 style={{ width: "100px" }}
                                 onChange={(event) => {
                                     setSelectedChapterRange({
                                         ...selectedChapterRange,
                                         min: Math.max(
                                             Math.min(
-                                                chapterRange!.max,
+                                                maxChapterValue!,
                                                 selectedChapterRange.max,
                                                 event.target.valueAsNumber
                                             ),
-                                            chapterRange!.min
+                                            minChapterValue!
                                         ),
                                     });
                                 }}
@@ -181,20 +293,24 @@ export function ComixDownloaderWindow({
                             <input
                                 id={"comix-downloader-chapter-to"}
                                 type={"number"}
-                                min={chapterRange?.min ?? 0}
-                                max={chapterRange?.max ?? 0}
+                                min={minChapterValue ?? 0}
+                                max={maxChapterValue ?? 0}
                                 value={selectedChapterRange.max}
-                                disabled={!chapterRange || isDownloading}
+                                disabled={
+                                    !minChapterValue ||
+                                    !maxChapterValue ||
+                                    isDownloading
+                                }
                                 style={{ width: "100px" }}
                                 onChange={(event) => {
                                     setSelectedChapterRange({
                                         ...selectedChapterRange,
                                         max: Math.max(
                                             Math.min(
-                                                chapterRange!.max,
+                                                maxChapterValue!,
                                                 event.target.valueAsNumber
                                             ),
-                                            chapterRange!.min,
+                                            minChapterValue!,
                                             selectedChapterRange.min
                                         ),
                                     });
@@ -216,7 +332,10 @@ export function ComixDownloaderWindow({
                 <button
                     id={"comix-downloader-download-button"}
                     disabled={
-                        isDownloading || !availableGroups || !chapterRange
+                        isDownloading ||
+                        !groups ||
+                        !minChapterValue ||
+                        !maxChapterValue
                     }
                     onClick={onclickDownload}
                 >
@@ -229,14 +348,78 @@ export function ComixDownloaderWindow({
             </section>
             <section style={{ marginTop: "1rem" }}>
                 <fieldset>
-                    <legend>Download Preview:</legend>
-                    <div
-                        style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "1rem",
-                        }}
-                    ></div>
+                    <legend>
+                        Download Preview: (
+                        {chaptersToDownload && chaptersToDownload.length})
+                    </legend>
+                    {isDownloading && (
+                        <div
+                            style={{
+                                display: "flex",
+                                flexDirection: "row",
+                                flexWrap: "nowrap",
+                                gap: "1rem",
+                                alignItems: "center",
+                            }}
+                        >
+                            <div>Progress:</div>
+                            {globalProgress.total == 0 ||
+                            globalProgress.done === globalProgress.total ? (
+                                <progress style={{ flexGrow: "1" }} />
+                            ) : (
+                                <progress
+                                    style={{ flexGrow: "1" }}
+                                    max={globalProgress.total}
+                                    value={globalProgress.done}
+                                />
+                            )}
+                            <div>
+                                {globalProgress.done} / {globalProgress.total}
+                            </div>
+                        </div>
+                    )}
+                    <table>
+                        <tr>
+                            <th style={{ width: "10%" }}>ID</th>
+                            <th style={{ width: "10%" }}>Volume</th>
+                            <th style={{ width: "10%" }}>Chapter</th>
+                            <th style={{ width: "30%" }}>Title</th>
+                            <th style={{ width: "10%" }}>Group</th>
+                            <th style={{ width: "20%" }}>File Name</th>
+                            <th style={{ width: "10%" }}>Progress</th>
+                        </tr>
+                        {chaptersToDownload &&
+                            chaptersToDownload.map((chapter) => {
+                                return (
+                                    <tr>
+                                        <td>{chapter.id}</td>
+                                        <td>Vol. {chapter.volume}</td>
+                                        <td>Chapter {chapter.chapter}</td>
+                                        <td>{chapter.title}</td>
+                                        <td>{chapter.group}</td>
+                                        <td>{chapter.outputFileName}</td>
+                                        <td>
+                                            {progress[chapter.id] &&
+                                                (progress[chapter.id]?.total ==
+                                                0 ? (
+                                                    <progress />
+                                                ) : (
+                                                    <progress
+                                                        max={
+                                                            progress[chapter.id]
+                                                                ?.total
+                                                        }
+                                                        value={
+                                                            progress[chapter.id]
+                                                                ?.done
+                                                        }
+                                                    />
+                                                ))}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                    </table>
                 </fieldset>
             </section>
         </div>

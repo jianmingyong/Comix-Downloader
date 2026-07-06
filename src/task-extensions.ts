@@ -1,6 +1,9 @@
 type Task<T> = () => Promise<T>;
 
-export function runAllTasks<T>(tasks: Task<T>[], concurrency: number) {
+export function runAllTasks<T>(
+    tasks: Task<T>[],
+    concurrency: number
+): Promise<Awaited<T>[]> {
     return new Promise((resolve, reject) => {
         let counter = 0;
         const runningTasks: Promise<T>[] = [];
