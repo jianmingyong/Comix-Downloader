@@ -4,7 +4,7 @@
 // @source       https://github.com/jianmingyong/Comix-Downloader
 // @updateURL    https://github.com/jianmingyong/Comix-Downloader/raw/refs/heads/master/dist/comix-downloader.user.js
 // @downloadURL  https://github.com/jianmingyong/Comix-Downloader/raw/refs/heads/master/dist/comix-downloader.user.js
-// @version      1.1.0
+// @version      1.2.0
 // @description  Try to annoy comix as much as possible by downloading everything.
 // @author       Yong Jian Ming
 // @match        *://comix.to/*
@@ -22029,7 +22029,7 @@
                         min: minChapterValue ?? 0,
                         max: maxChapterValue ?? 0,
                         value: selectedChapterRange.min,
-                        disabled: !minChapterValue || !maxChapterValue || isDownloading,
+                        disabled: minChapterValue == null || maxChapterValue == null || isDownloading,
                         style: { width: "100px" },
                         onChange: (event) => {
                           setSelectedChapterRange({
@@ -22068,7 +22068,7 @@
                         min: minChapterValue ?? 0,
                         max: maxChapterValue ?? 0,
                         value: selectedChapterRange.max,
-                        disabled: !minChapterValue || !maxChapterValue || isDownloading,
+                        disabled: minChapterValue == null || maxChapterValue == null || isDownloading,
                         style: { width: "100px" },
                         onChange: (event) => {
                           setSelectedChapterRange({
@@ -22107,7 +22107,7 @@
               "button",
               {
                 id: "comix-downloader-download-button",
-                disabled: isDownloading || !groups || !minChapterValue || !maxChapterValue,
+                disabled: isDownloading || !groups || minChapterValue == null || maxChapterValue == null,
                 onClick: onclickDownload,
                 children: "Download"
               }

@@ -259,8 +259,8 @@ export function ComixDownloaderWindow({
                                 max={maxChapterValue ?? 0}
                                 value={selectedChapterRange.min}
                                 disabled={
-                                    !minChapterValue ||
-                                    !maxChapterValue ||
+                                    minChapterValue == null ||
+                                    maxChapterValue == null ||
                                     isDownloading
                                 }
                                 style={{ width: "100px" }}
@@ -297,8 +297,8 @@ export function ComixDownloaderWindow({
                                 max={maxChapterValue ?? 0}
                                 value={selectedChapterRange.max}
                                 disabled={
-                                    !minChapterValue ||
-                                    !maxChapterValue ||
+                                    minChapterValue == null ||
+                                    maxChapterValue == null ||
                                     isDownloading
                                 }
                                 style={{ width: "100px" }}
@@ -334,8 +334,8 @@ export function ComixDownloaderWindow({
                     disabled={
                         isDownloading ||
                         !groups ||
-                        !minChapterValue ||
-                        !maxChapterValue
+                        minChapterValue == null ||
+                        maxChapterValue == null
                     }
                     onClick={onclickDownload}
                 >
