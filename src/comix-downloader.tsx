@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { ComixDownloaderWindow } from "./downloader-ui/comix-downloader-window";
 import type {
     ComixChapterItem,
     ComixChapterJson,
@@ -14,7 +15,6 @@ import {
 import { createElement } from "./document-extensions";
 import { sanitizeFilename } from "./file-extensions";
 import { runAllTasks } from "./task-extensions";
-import { ComixDownloaderWindow } from "./downloader-ui/comix-downloader-window";
 
 export class ComixChapter {
     private _id: number;
@@ -226,11 +226,7 @@ class ComixPageDownloadTask {
                     );
 
                     const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
-                    this.targetZipFile.file(
-                        outputFileName,
-                        data.split(",")[1],
-                        { base64: true }
-                    );
+                    this.targetZipFile.file(outputFileName, data);
                 } else {
                     // Unscrambled Pages
                     const response = await fetch(this.item.url, {
@@ -247,8 +243,14 @@ class ComixPageDownloadTask {
                     }
 
                     const blob = await response.blob();
-                    const outputFileName = `${String(this.index).padStart(3, "0")}.webp`;
-                    this.targetZipFile.file(outputFileName, blob);
+                    const output = await this.module.removeBanner(
+                        blob,
+                        this.item.width,
+                        this.item.height
+                    );
+
+                    const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
+                    this.targetZipFile.file(outputFileName, output);
                 }
 
                 this.doneCallback();

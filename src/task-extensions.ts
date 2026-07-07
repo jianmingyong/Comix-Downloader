@@ -25,12 +25,3 @@ export function runAllTasks<T>(
         }
     });
 }
-
-export function createTask<T>(task: Task<T>, signal?: AbortSignal): Task<T> {
-    return () => {
-        return new Promise((resolve, reject) => {
-            signal?.throwIfAborted();
-            task().then(resolve).catch(reject);
-        });
-    };
-}

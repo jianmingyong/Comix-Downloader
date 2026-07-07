@@ -379,46 +379,52 @@ export function ComixDownloaderWindow({
                         </div>
                     )}
                     <table>
-                        <tr>
-                            <th style={{ width: "10%" }}>ID</th>
-                            <th style={{ width: "10%" }}>Volume</th>
-                            <th style={{ width: "10%" }}>Chapter</th>
-                            <th style={{ width: "30%" }}>Title</th>
-                            <th style={{ width: "10%" }}>Group</th>
-                            <th style={{ width: "20%" }}>File Name</th>
-                            <th style={{ width: "10%" }}>Progress</th>
-                        </tr>
-                        {chaptersToDownload &&
-                            chaptersToDownload.map((chapter) => {
-                                return (
-                                    <tr>
-                                        <td>{chapter.id}</td>
-                                        <td>Vol. {chapter.volume}</td>
-                                        <td>Chapter {chapter.chapter}</td>
-                                        <td>{chapter.title}</td>
-                                        <td>{chapter.group}</td>
-                                        <td>{chapter.outputFileName}</td>
-                                        <td>
-                                            {progress[chapter.id] &&
-                                                (progress[chapter.id]?.total ==
-                                                0 ? (
-                                                    <progress />
-                                                ) : (
-                                                    <progress
-                                                        max={
-                                                            progress[chapter.id]
-                                                                ?.total
-                                                        }
-                                                        value={
-                                                            progress[chapter.id]
-                                                                ?.done
-                                                        }
-                                                    />
-                                                ))}
-                                        </td>
-                                    </tr>
-                                );
-                            })}
+                        <thead>
+                            <tr>
+                                <th style={{ width: "10%" }}>ID</th>
+                                <th style={{ width: "10%" }}>Volume</th>
+                                <th style={{ width: "10%" }}>Chapter</th>
+                                <th style={{ width: "30%" }}>Title</th>
+                                <th style={{ width: "10%" }}>Group</th>
+                                <th style={{ width: "20%" }}>File Name</th>
+                                <th style={{ width: "10%" }}>Progress</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {chaptersToDownload &&
+                                chaptersToDownload.map((chapter) => {
+                                    return (
+                                        <tr key={chapter.id}>
+                                            <td>{chapter.id}</td>
+                                            <td>Vol. {chapter.volume}</td>
+                                            <td>Chapter {chapter.chapter}</td>
+                                            <td>{chapter.title}</td>
+                                            <td>{chapter.group}</td>
+                                            <td>{chapter.outputFileName}</td>
+                                            <td>
+                                                {progress[chapter.id] &&
+                                                    (progress[chapter.id]
+                                                        ?.total == 0 ? (
+                                                        <progress />
+                                                    ) : (
+                                                        <progress
+                                                            max={
+                                                                progress[
+                                                                    chapter.id
+                                                                ]?.total
+                                                            }
+                                                            value={
+                                                                progress[
+                                                                    chapter.id
+                                                                ]?.done
+                                                            }
+                                                        />
+                                                    ))}
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                        </tbody>
                     </table>
                 </fieldset>
             </section>

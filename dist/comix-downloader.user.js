@@ -21482,121 +21482,6 @@
     }
   });
 
-  // src/constants.ts
-  var DEFAULT_WAIT_TIMEOUT, DEFAULT_FETCH_TIMEOUT, DEFAULT_MAX_RETRY, RETRY_WAIT_TIME, CHAPTER_DOWNLOAD_CONCURRENCY, PAGE_DOWNLOAD_CONCURRENCY, AsyncFunction;
-  var init_constants = __esm({
-    "src/constants.ts"() {
-      "use strict";
-      DEFAULT_WAIT_TIMEOUT = 30 * 1e3;
-      DEFAULT_FETCH_TIMEOUT = 30 * 1e3;
-      DEFAULT_MAX_RETRY = 5;
-      RETRY_WAIT_TIME = 5 * 1e3;
-      CHAPTER_DOWNLOAD_CONCURRENCY = 4;
-      PAGE_DOWNLOAD_CONCURRENCY = 12;
-      AsyncFunction = async function() {
-      }.constructor;
-    }
-  });
-
-  // src/document-extensions.ts
-  function querySelectorWaitUntil(selectors, conditions, signal) {
-    conditions ??= (element) => element ? true : false;
-    if (signal && typeof signal === "number") {
-      signal = AbortSignal.timeout(signal);
-    } else if (signal && !(signal instanceof AbortSignal)) {
-      throw new TypeError("signal must either be a number or AbortSignal");
-    }
-    return new Promise((resolve, reject) => {
-      function findElement(selectors2, conditions2, signal2) {
-        if (signal2?.aborted) {
-          if (signal2.reason instanceof Error) {
-            reject(signal2.reason);
-          } else {
-            reject(new Error(String(signal2.reason)));
-          }
-          return;
-        }
-        const element = document.querySelector(selectors2);
-        if (conditions2(element)) {
-          resolve(element);
-        } else {
-          setTimeout(findElement, 1, selectors2, conditions2, signal2);
-        }
-      }
-      findElement(selectors, conditions, signal);
-    });
-  }
-  function createElement(tagName, attributes) {
-    const element = document.createElement(tagName);
-    if (attributes) {
-      for (const key in attributes) {
-        if (!Object.hasOwn(attributes, key)) continue;
-        const value = attributes[key];
-        if (key === "class") {
-          if (typeof value === "string") {
-            element.className = value;
-          } else if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
-            element.classList.add(...value);
-          } else {
-            throw new TypeError("class must be a string or string[]");
-          }
-        } else if (key === "children") {
-          if (typeof value === "string" || value instanceof Node) {
-            element.append(value);
-          } else if (Array.isArray(value)) {
-            const displayableValue = value.filter(
-              (v) => typeof v === "string" || v instanceof Node
-            );
-            element.append(...displayableValue);
-          } else if (typeof value === "boolean") {
-          } else {
-            throw new TypeError(
-              "children must be a string, a Node, or an array of them"
-            );
-          }
-        } else if (key !== "constructor" && key in element) {
-          try {
-            Reflect.set(element, key, value);
-          } catch {
-            element.setAttribute(key, String(value));
-          }
-        } else {
-          if (typeof value !== "string") {
-            throw new TypeError(`${key} must be a string`);
-          }
-          element.setAttribute(key, value);
-        }
-      }
-    }
-    return element;
-  }
-  var init_document_extensions = __esm({
-    "src/document-extensions.ts"() {
-      "use strict";
-    }
-  });
-
-  // src/file-extensions.ts
-  function saveAs(name, data) {
-    const downloadElement = document.createElement("a");
-    downloadElement.href = URL.createObjectURL(data);
-    downloadElement.download = name;
-    downloadElement.click();
-    URL.revokeObjectURL(downloadElement.href);
-  }
-  function sanitizeFilename(name) {
-    const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
-    if (reserved.test(name)) {
-      name = "_" + name;
-    }
-    return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, "").replace(/[. ]+$/g, "").trim();
-  }
-  var init_file_extensions = __esm({
-    "src/file-extensions.ts"() {
-      "use strict";
-    }
-  });
-
   // src/task-extensions.ts
   function runAllTasks(tasks, concurrency) {
     return new Promise((resolve, reject) => {
@@ -21619,6 +21504,43 @@
   }
   var init_task_extensions = __esm({
     "src/task-extensions.ts"() {
+      "use strict";
+    }
+  });
+
+  // src/constants.ts
+  var DEFAULT_WAIT_TIMEOUT, DEFAULT_FETCH_TIMEOUT, DEFAULT_MAX_RETRY, RETRY_WAIT_TIME, CHAPTER_DOWNLOAD_CONCURRENCY, PAGE_DOWNLOAD_CONCURRENCY, AsyncFunction;
+  var init_constants = __esm({
+    "src/constants.ts"() {
+      "use strict";
+      DEFAULT_WAIT_TIMEOUT = 30 * 1e3;
+      DEFAULT_FETCH_TIMEOUT = 30 * 1e3;
+      DEFAULT_MAX_RETRY = 5;
+      RETRY_WAIT_TIME = 5 * 1e3;
+      CHAPTER_DOWNLOAD_CONCURRENCY = 4;
+      PAGE_DOWNLOAD_CONCURRENCY = 12;
+      AsyncFunction = async function() {
+      }.constructor;
+    }
+  });
+
+  // src/file-extensions.ts
+  function saveAs(name, data) {
+    const downloadElement = document.createElement("a");
+    downloadElement.href = URL.createObjectURL(data);
+    downloadElement.download = name;
+    downloadElement.click();
+    URL.revokeObjectURL(downloadElement.href);
+  }
+  function sanitizeFilename(name) {
+    const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+    if (reserved.test(name)) {
+      name = "_" + name;
+    }
+    return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, "").replace(/[. ]+$/g, "").trim();
+  }
+  var init_file_extensions = __esm({
+    "src/file-extensions.ts"() {
       "use strict";
     }
   });
@@ -22229,7 +22151,7 @@
           }
         ),
         /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("table", { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("thead", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { style: { width: "10%" }, children: "ID" }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { style: { width: "10%" }, children: "Volume" }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { style: { width: "10%" }, children: "Chapter" }),
@@ -22237,8 +22159,8 @@
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { style: { width: "10%" }, children: "Group" }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { style: { width: "20%" }, children: "File Name" }),
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)("th", { style: { width: "10%" }, children: "Progress" })
-          ] }),
-          chaptersToDownload && chaptersToDownload.map((chapter) => {
+          ] }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("tbody", { children: chaptersToDownload && chaptersToDownload.map((chapter) => {
             return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("tr", { children: [
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: chapter.id }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("td", { children: [
@@ -22259,8 +22181,8 @@
                   value: progress[chapter.id]?.done
                 }
               )) })
-            ] });
-          })
+            ] }, chapter.id);
+          }) })
         ] })
       ] }) })
     ] });
@@ -22278,17 +22200,95 @@
     }
   });
 
+  // src/document-extensions.ts
+  function querySelectorWaitUntil(selectors, conditions, signal) {
+    conditions ??= (element) => element ? true : false;
+    if (signal && typeof signal === "number") {
+      signal = AbortSignal.timeout(signal);
+    } else if (signal && !(signal instanceof AbortSignal)) {
+      throw new TypeError("signal must either be a number or AbortSignal");
+    }
+    return new Promise((resolve, reject) => {
+      function findElement(selectors2, conditions2, signal2) {
+        if (signal2?.aborted) {
+          if (signal2.reason instanceof Error) {
+            reject(signal2.reason);
+          } else {
+            reject(new Error(String(signal2.reason)));
+          }
+          return;
+        }
+        const element = document.querySelector(selectors2);
+        if (conditions2(element)) {
+          resolve(element);
+        } else {
+          setTimeout(findElement, 1, selectors2, conditions2, signal2);
+        }
+      }
+      findElement(selectors, conditions, signal);
+    });
+  }
+  function createElement(tagName, attributes) {
+    const element = document.createElement(tagName);
+    if (attributes) {
+      for (const key in attributes) {
+        if (!Object.hasOwn(attributes, key)) continue;
+        const value = attributes[key];
+        if (key === "class") {
+          if (typeof value === "string") {
+            element.className = value;
+          } else if (Array.isArray(value) && value.every((v) => typeof v === "string")) {
+            element.classList.add(...value);
+          } else {
+            throw new TypeError("class must be a string or string[]");
+          }
+        } else if (key === "children") {
+          if (typeof value === "string" || value instanceof Node) {
+            element.append(value);
+          } else if (Array.isArray(value)) {
+            const displayableValue = value.filter(
+              (v) => typeof v === "string" || v instanceof Node
+            );
+            element.append(...displayableValue);
+          } else if (typeof value === "boolean") {
+          } else {
+            throw new TypeError(
+              "children must be a string, a Node, or an array of them"
+            );
+          }
+        } else if (key !== "constructor" && key in element) {
+          try {
+            Reflect.set(element, key, value);
+          } catch {
+            element.setAttribute(key, String(value));
+          }
+        } else {
+          if (typeof value !== "string") {
+            throw new TypeError(`${key} must be a string`);
+          }
+          element.setAttribute(key, value);
+        }
+      }
+    }
+    return element;
+  }
+  var init_document_extensions = __esm({
+    "src/document-extensions.ts"() {
+      "use strict";
+    }
+  });
+
   // src/comix-downloader.tsx
   var import_client, import_jsx_runtime2, ComixChapter2, ComixDownloadTask2, ComixPageDownloadTask, ComixDownloader;
   var init_comix_downloader = __esm({
     "src/comix-downloader.tsx"() {
       "use strict";
       import_client = __toESM(require_client());
+      init_comix_downloader_window();
       init_constants();
       init_document_extensions();
       init_file_extensions();
       init_task_extensions();
-      init_comix_downloader_window();
       import_jsx_runtime2 = __toESM(require_jsx_runtime());
       ComixChapter2 = class {
         _id;
@@ -22439,11 +22439,7 @@
                   ])
                 );
                 const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
-                this.targetZipFile.file(
-                  outputFileName,
-                  data.split(",")[1],
-                  { base64: true }
-                );
+                this.targetZipFile.file(outputFileName, data);
               } else {
                 const response = await fetch(this.item.url, {
                   signal: AbortSignal.any([
@@ -22457,8 +22453,13 @@
                   );
                 }
                 const blob = await response.blob();
-                const outputFileName = `${String(this.index).padStart(3, "0")}.webp`;
-                this.targetZipFile.file(outputFileName, blob);
+                const output = await this.module.removeBanner(
+                  blob,
+                  this.item.width,
+                  this.item.height
+                );
+                const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
+                this.targetZipFile.file(outputFileName, output);
               }
               this.doneCallback();
               return;
@@ -26363,7 +26364,8 @@
       init_document_extensions();
       init_url_extensions();
       ComixSecureModule = class _ComixSecureModule {
-        static canvasToDataURL = HTMLCanvasElement.prototype.toDataURL;
+        static canvasToBlob = HTMLCanvasElement.prototype.toBlob;
+        static canvasContext2DGetImageData = CanvasRenderingContext2D.prototype.getImageData;
         axios = axios_default.create();
         descrambler = [];
         async initialize() {
@@ -26502,7 +26504,78 @@
             } catch {
             }
           }
-          return _ComixSecureModule.canvasToDataURL.call(canvas);
+          return await new Promise((resolve, reject) => {
+            _ComixSecureModule.canvasToBlob.call(canvas, (blob) => {
+              if (blob) {
+                resolve(blob);
+              } else {
+                reject(
+                  new Error(
+                    "Unable to create blob from the selected canvas"
+                  )
+                );
+              }
+            });
+          });
+        }
+        async removeBanner(blob, width, height) {
+          const image = await new Promise((resolve, reject) => {
+            const image2 = new Image();
+            image2.src = URL.createObjectURL(blob);
+            image2.onload = () => {
+              resolve(image2);
+            };
+            image2.onerror = (_e, _s, _l, _c, error) => {
+              reject(error ?? new Error("Image load error"));
+            };
+          });
+          URL.revokeObjectURL(image.src);
+          const canvas = createElement("canvas", {
+            width,
+            height
+          });
+          const ctx = canvas.getContext("2d");
+          ctx?.drawImage(image, 0, 0);
+          const bannerHeight = Math.floor(width / 6);
+          const colors = _ComixSecureModule.canvasContext2DGetImageData.call(
+            ctx,
+            0,
+            height - bannerHeight,
+            width,
+            bannerHeight
+          );
+          const pixels = [];
+          const pattern = [24, 24, 24];
+          for (let i = 0; i < colors.data.length; i += 4) {
+            pixels.push([
+              colors.data[i],
+              colors.data[i + 1],
+              colors.data[i + 2]
+            ]);
+          }
+          let countMatch = 0;
+          pixels.forEach((pixel) => {
+            if (pixel[0] === pattern[0] && pixel[1] === pattern[1] && pixel[2] === pattern[2]) {
+              countMatch++;
+            }
+          });
+          if (countMatch / pixels.length >= 0.75) {
+            canvas.height = canvas.height - Math.floor(canvas.width / 6);
+            ctx?.drawImage(image, 0, 0);
+          }
+          return await new Promise((resolve, reject) => {
+            _ComixSecureModule.canvasToBlob.call(canvas, (blob2) => {
+              if (blob2) {
+                resolve(blob2);
+              } else {
+                reject(
+                  new Error(
+                    "Unable to create blob from the selected canvas"
+                  )
+                );
+              }
+            });
+          });
         }
       };
     }

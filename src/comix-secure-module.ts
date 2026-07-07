@@ -11,11 +11,13 @@ import {
     DEFAULT_FETCH_TIMEOUT,
     DEFAULT_WAIT_TIMEOUT,
 } from "./constants";
-import { querySelectorWaitUntil } from "./document-extensions";
+import { createElement, querySelectorWaitUntil } from "./document-extensions";
 import { urlParamsToObject } from "./url-extensions";
 
 export class ComixSecureModule {
-    private static canvasToDataURL = HTMLCanvasElement.prototype.toDataURL;
+    public static canvasToBlob = HTMLCanvasElement.prototype.toBlob;
+    public static canvasContext2DGetImageData =
+        CanvasRenderingContext2D.prototype.getImageData;
 
     private axios: AxiosInstance = axios.create();
     private descrambler: Function[] = [];
@@ -144,7 +146,7 @@ export class ComixSecureModule {
         url: string,
         canvas: HTMLCanvasElement,
         signal?: AbortSignal
-    ): Promise<string> {
+    ): Promise<Blob> {
         for (const descramblerFunction of this.descrambler) {
             // This assume the api fetch and draw into the canvas directly.
             try {
@@ -207,6 +209,97 @@ export class ComixSecureModule {
             }
         }
 
-        return ComixSecureModule.canvasToDataURL.call(canvas);
+        return await new Promise((resolve, reject) => {
+            ComixSecureModule.canvasToBlob.call(canvas, (blob) => {
+                if (blob) {
+                    resolve(blob);
+                } else {
+                    reject(
+                        new Error(
+                            "Unable to create blob from the selected canvas"
+                        )
+                    );
+                }
+            });
+        });
+    }
+
+    public async removeBanner(
+        blob: Blob,
+        width: number,
+        height: number
+    ): Promise<Blob> {
+        const image: HTMLImageElement = await new Promise((resolve, reject) => {
+            const image = new Image();
+            image.src = URL.createObjectURL(blob);
+            image.onload = () => {
+                resolve(image);
+            };
+            image.onerror = (_e, _s, _l, _c, error) => {
+                reject(error ?? new Error("Image load error"));
+            };
+        });
+
+        URL.revokeObjectURL(image.src);
+        const canvas = createElement("canvas", {
+            width: width,
+            height: height,
+        });
+        const ctx = canvas.getContext("2d");
+        ctx?.drawImage(image, 0, 0);
+
+        const bannerHeight = Math.floor(width / 6);
+        const colors = ComixSecureModule.canvasContext2DGetImageData.call(
+            ctx,
+            0,
+            height - bannerHeight,
+            width,
+            bannerHeight
+        );
+        const pixels = [];
+        const pattern = [24, 24, 24];
+
+        for (let i = 0; i < colors.data.length; i += 4) {
+            // We only care about RGB. Alpha can skip as it isn't really helpful.
+            pixels.push([
+                colors.data[i],
+                colors.data[i + 1],
+                colors.data[i + 2],
+            ]);
+        }
+
+        let countMatch = 0;
+
+        pixels.forEach((pixel) => {
+            if (
+                pixel[0] === pattern[0] &&
+                pixel[1] === pattern[1] &&
+                pixel[2] === pattern[2]
+            ) {
+                countMatch++;
+            }
+        });
+
+        // console.log("Comix Pixel Check:", countMatch / pixels.length);
+
+        if (countMatch / pixels.length >= 0.75) {
+            // Most likely this is indeed comix banner
+            canvas.height = canvas.height - Math.floor(canvas.width / 6);
+            ctx?.drawImage(image, 0, 0);
+        }
+
+        return await new Promise((resolve, reject) => {
+            ComixSecureModule.canvasToBlob.call(canvas, (blob) => {
+                if (blob) {
+                    resolve(blob);
+                } else {
+                    reject(
+                        new Error(
+                            "Unable to create blob from the selected canvas"
+                        )
+                    );
+                }
+            });
+        });
     }
 }
