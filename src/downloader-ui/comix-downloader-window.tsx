@@ -5,8 +5,9 @@ import {
     type ComixDownloader,
 } from "../comix-downloader";
 import { runAllTasks } from "../task-extensions";
-import { CHAPTER_DOWNLOAD_CONCURRENCY } from "../constants";
+import { CHAPTER_DOWNLOAD_CONCURRENCY, MAX_ZIP_SIZE } from "../constants";
 import { sanitizeFilename, saveAs } from "../file-extensions";
+import { ZipWriter } from "@zip.js/zip.js";
 
 interface ChapterRange {
     min: number;
@@ -16,6 +17,7 @@ interface ChapterRange {
 interface Progress {
     done: number;
     total: number;
+    isZipped: boolean;
 }
 
 export function ComixDownloaderWindow({
@@ -103,16 +105,17 @@ export function ComixDownloaderWindow({
 
         chaptersToDownload?.forEach((chapter) => {
             const id = chapter.id;
-            progress[id] = { done: 0, total: 0 };
+            progress[id] = { done: 0, total: 0, isZipped: false };
 
             tasks.push(
-                chapter.createDownloadTask(downloader.signal!, (progress) => {
+                chapter.createDownloadTask(downloader.signal, (progress) => {
                     setProgress((value) => {
                         return {
                             ...value,
                             [id]: {
                                 done: progress.done,
                                 total: progress.total,
+                                isZipped: progress.isZipped,
                             },
                         };
                     });
@@ -122,42 +125,45 @@ export function ComixDownloaderWindow({
 
         setProgress(progress);
 
-        const globalZip = new JSZip();
-
         runAllTasks(
             tasks.map((t) => () => t.start()),
             CHAPTER_DOWNLOAD_CONCURRENCY
         )
-            .then((zip) => {
-                const tasks: Array<() => Promise<void>> = [];
-
-                zip.forEach(([filename, zip]) => {
-                    tasks.push(() =>
-                        zip
-                            .generateAsync({
-                                type: "blob",
-                                compression: "DEFLATE",
-                                compressionOptions: { level: 9 },
-                            })
-                            .then((blob) => {
-                                globalZip.file(filename, blob);
-                            })
-                    );
-                });
-
-                return runAllTasks(tasks, 4);
-            })
-            .then(() => {
-                return globalZip.generateAsync({
-                    type: "blob",
-                    compression: "DEFLATE",
-                    compressionOptions: { level: 9 },
-                });
-            })
-            .then((blob) => {
+            .then(async (fileHandles) => {
+                const opfsDirectory = await navigator.storage.getDirectory();
                 const title =
                     document.querySelector("h1.mpage__title")?.textContent;
-                saveAs(sanitizeFilename(`${title}.zip`), blob);
+                let fileHandle = await opfsDirectory.getFileHandle(
+                    sanitizeFilename(`${title}.zip`),
+                    {
+                        create: true,
+                    }
+                );
+                let writableFileStream = await fileHandle.createWritable({
+                    keepExistingData: false,
+                });
+                let zipWriter = new ZipWriter<FileSystemWritableFileStream>(
+                    writableFileStream,
+                    {
+                        compressionMethod: 8,
+                        level: 9,
+                    }
+                );
+
+                for (const fileHandle of fileHandles) {
+                    const file = await fileHandle.getFile();
+                    await zipWriter.add(fileHandle.name, file.stream());
+                }
+
+                await zipWriter.close();
+                const file = await fileHandle.getFile();
+                saveAs(sanitizeFilename(`${title}.zip`), file);
+
+                for (const fileHandle of fileHandles) {
+                    await opfsDirectory.removeEntry(fileHandle.name);
+                }
+
+                await opfsDirectory.removeEntry(fileHandle.name);
             })
             .catch(console.log)
             .finally(() => {
@@ -378,16 +384,16 @@ export function ComixDownloaderWindow({
                             </div>
                         </div>
                     )}
-                    <table>
+                    <table style={{ width: "100%" }}>
                         <thead>
                             <tr>
                                 <th style={{ width: "10%" }}>ID</th>
                                 <th style={{ width: "10%" }}>Volume</th>
                                 <th style={{ width: "10%" }}>Chapter</th>
-                                <th style={{ width: "30%" }}>Title</th>
+                                <th style={{ width: "20%" }}>Title</th>
                                 <th style={{ width: "10%" }}>Group</th>
                                 <th style={{ width: "20%" }}>File Name</th>
-                                <th style={{ width: "10%" }}>Progress</th>
+                                <th style={{ width: "20%" }}>Progress</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -406,6 +412,20 @@ export function ComixDownloaderWindow({
                                                     (progress[chapter.id]
                                                         ?.total == 0 ? (
                                                         <progress />
+                                                    ) : progress[chapter.id]
+                                                          ?.done ===
+                                                      progress[chapter.id]
+                                                          ?.total ? (
+                                                        <progress
+                                                            max={1}
+                                                            value={
+                                                                progress[
+                                                                    chapter.id
+                                                                ]?.isZipped
+                                                                    ? 1
+                                                                    : undefined
+                                                            }
+                                                        />
                                                     ) : (
                                                         <progress
                                                             max={

@@ -2,11 +2,8 @@ import { createRoot } from "react-dom/client";
 import { ComixDownloaderWindow } from "./downloader-ui/comix-downloader-window";
 import type {
     ComixChapterItem,
-    ComixChapterJson,
     ComixChapterPageItem,
-    ComixChapterPageJson,
 } from "./comix-api-model";
-import type { ComixSecureModule } from "./comix-secure-module";
 import {
     DEFAULT_FETCH_TIMEOUT,
     DEFAULT_MAX_RETRY,
@@ -15,20 +12,19 @@ import {
 import { createElement } from "./document-extensions";
 import { sanitizeFilename } from "./file-extensions";
 import { runAllTasks } from "./task-extensions";
+import type { ComixApi } from "./comix-api";
+import { BlobReader, ZipWriter } from "@zip.js/zip.js";
 
 export class ComixChapter {
-    private _id: number;
-    private _volume: number;
-    private _chapter: number;
-    private _title: string;
-    private _isOfficial: boolean;
     private _group: string | null;
     private _outputFileName: string;
 
-    private module: ComixSecureModule;
+    private readonly api: ComixApi;
+    private readonly item: ComixChapterItem;
 
-    public constructor(module: ComixSecureModule, item: ComixChapterItem) {
-        this.module = module;
+    public constructor(api: ComixApi, item: ComixChapterItem) {
+        this.api = api;
+        this.item = item;
 
         let outputFileName = "";
 
@@ -52,11 +48,6 @@ export class ComixChapter {
             outputFileName += `[${item.creator.name}] `;
         }
 
-        this._id = item.id;
-        this._volume = item.volume;
-        this._chapter = item.number;
-        this._title = item.name ?? "";
-        this._isOfficial = item.isOfficial;
         this._group =
             item.group?.name ??
             (item.isOfficial ? "Official" : null) ??
@@ -66,23 +57,23 @@ export class ComixChapter {
     }
 
     public get id(): number {
-        return this._id;
+        return this.item.id;
     }
 
     public get volume(): number {
-        return this._volume;
+        return this.item.volume;
     }
 
     public get chapter(): number {
-        return this._chapter;
+        return this.item.number;
     }
 
     public get title(): string {
-        return this._title;
+        return this.item.name;
     }
 
     public get isOfficial(): boolean {
-        return this._isOfficial;
+        return this.item.isOfficial;
     }
 
     public get group(): string | null {
@@ -98,7 +89,7 @@ export class ComixChapter {
         progressCallback: ComixDownloadProgressCallback
     ): ComixDownloadTask {
         return new ComixDownloadTask(
-            this.module,
+            this.api,
             this,
             signal,
             progressCallback
@@ -109,12 +100,13 @@ export class ComixChapter {
 interface ComixDownloadProgress {
     done: number;
     total: number;
+    isZipped: boolean;
 }
 
 type ComixDownloadProgressCallback = (progress: ComixDownloadProgress) => void;
 
 export class ComixDownloadTask {
-    private module: ComixSecureModule;
+    private readonly api: ComixApi;
     private chapter: ComixChapter;
     private signal: AbortSignal;
 
@@ -124,83 +116,95 @@ export class ComixDownloadTask {
     private progressCallback: ComixDownloadProgressCallback;
 
     public constructor(
-        module: ComixSecureModule,
+        api: ComixApi,
         chapter: ComixChapter,
         signal: AbortSignal,
         progressCallback: ComixDownloadProgressCallback
     ) {
-        this.module = module;
+        this.api = api;
         this.chapter = chapter;
         this.signal = signal;
         this.progressCallback = progressCallback;
     }
 
-    public async start(): Promise<[string, typeof JSZip]> {
+    public async start(): Promise<FileSystemFileHandle> {
         this.signal.throwIfAborted();
 
-        const json = (await this.module.fetchJsonWithAxiosInterceptors(
-            `https://comix.to/api/v1/chapters/${this.chapter.id}`,
-            {
-                signal: AbortSignal.any([
-                    AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
-                    this.signal,
-                ]),
-            }
-        )) as ComixChapterPageJson;
+        const json = await this.api.getChapterPages(this.chapter.id, AbortSignal.any([
+            AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
+            this.signal,
+        ]));
 
-        const zip = new JSZip();
+        const opfsDirectory = await navigator.storage.getDirectory();
+        const fileHandle = await opfsDirectory.getFileHandle(this.chapter.outputFileName, {
+            create: true
+        });
+        const writableFileStream = await fileHandle.createWritable({ keepExistingData: false });
+        const zipWriter = new ZipWriter<FileSystemWritableFileStream>(writableFileStream, {
+            compressionMethod: 8,
+            level: 9,
+        });
 
-        json?.pages?.items?.forEach((item, index) => {
+        json.pages.items.forEach((item, index, array) => {
             this.task.push(
                 new ComixPageDownloadTask(
-                    this.module,
+                    this.api,
                     item,
                     index,
-                    zip,
+                    index + 1 == array.length,
+                    zipWriter,
                     this.signal,
                     () => {
                         this.progressCallback({
                             done: ++this.done,
                             total: this.task.length,
+                            isZipped: false,
                         });
                     }
                 )
             );
         });
 
-        this.progressCallback({ done: 0, total: this.task.length });
+        this.progressCallback({ done: 0, total: this.task.length, isZipped: false });
 
         await runAllTasks(
             this.task.map((t) => () => t.start()),
             PAGE_DOWNLOAD_CONCURRENCY
         );
 
-        return [this.chapter.outputFileName, zip];
+        await zipWriter.close();
+
+        this.progressCallback({ done: this.done, total: this.task.length, isZipped: true });
+
+        return fileHandle;
     }
 }
 
 class ComixPageDownloadTask {
-    private module: ComixSecureModule;
-    private item: ComixChapterPageItem;
-    private index: number;
-    private targetZipFile: typeof JSZip;
-    private signal: AbortSignal;
-    private doneCallback: Function;
+    private readonly api: ComixApi;
+    private readonly item: ComixChapterPageItem;
+    private readonly index: number;
+    private readonly isLast: boolean;
+    private readonly zipWriter: ZipWriter<FileSystemWritableFileStream>;
+    private readonly signal: AbortSignal;
+    private readonly doneCallback: Function;
 
     private retry: number = 0;
 
     public constructor(
-        module: ComixSecureModule,
+        api: ComixApi,
         item: ComixChapterPageItem,
         index: number,
-        targetZipFile: typeof JSZip,
+        isLast: boolean,
+        zipWriter: ZipWriter<FileSystemWritableFileStream>,
         signal: AbortSignal,
         doneCallback: Function
     ) {
-        this.module = module;
+        this.api = api;
         this.item = item;
         this.index = index;
-        this.targetZipFile = targetZipFile;
+        this.isLast = isLast;
+        this.zipWriter = zipWriter;
         this.signal = signal;
         this.doneCallback = doneCallback;
     }
@@ -216,7 +220,7 @@ class ComixPageDownloadTask {
                     canvas.width = this.item.width;
                     canvas.height = this.item.height;
 
-                    const data = await this.module.descrambleImage(
+                    const data = await this.api.descrambleImage(
                         this.item.url,
                         canvas,
                         AbortSignal.any([
@@ -226,7 +230,7 @@ class ComixPageDownloadTask {
                     );
 
                     const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
-                    this.targetZipFile.file(outputFileName, data);
+                    await this.zipWriter.add(outputFileName, new BlobReader(data));
                 } else {
                     // Unscrambled Pages
                     const response = await fetch(this.item.url, {
@@ -242,15 +246,14 @@ class ComixPageDownloadTask {
                         );
                     }
 
-                    const blob = await response.blob();
-                    const output = await this.module.removeBanner(
-                        blob,
-                        this.item.width,
-                        this.item.height
-                    );
+                    let blob = await response.blob();
+
+                    if (this.isLast) {
+                        blob = await this.api.removeBanner(blob, this.item.width, this.item.height);
+                    }
 
                     const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
-                    this.targetZipFile.file(outputFileName, output);
+                    await this.zipWriter.add(outputFileName, new BlobReader(blob));
                 }
 
                 this.doneCallback();
@@ -274,27 +277,43 @@ export class ComixDownloader {
         );
     }
 
-    private module: ComixSecureModule;
-    private overlay: HTMLElement | null = null;
+    private readonly api: ComixApi;
     private abortController: AbortController | null = null;
+    private overlay: HTMLElement | null = null;
 
-    public get signal(): AbortSignal | null {
-        return this.abortController?.signal ?? null;
+    public get signal(): AbortSignal {
+        if (!this.abortController) throw new Error("Abort Controller does not exist...");
+        return this.abortController.signal;
     }
 
-    public constructor(module: ComixSecureModule) {
-        this.module = module;
+    public constructor(api: ComixApi) {
+        this.api = api;
     }
 
     public show() {
-        this.createUI();
+        if (this.overlay) return;
+
         this.abortController = new AbortController();
+
+        document.body.append(
+            createElement("div", {
+                id: "comix-downloader-overlay",
+            })
+        );
+
+        this.overlay = document.getElementById("comix-downloader-overlay")!;
+
+        const root = createRoot(this.overlay);
+        root.render(<ComixDownloaderWindow downloader={this} />);
     }
 
     public close() {
         if (!this.overlay) return;
+
         this.abortController?.abort();
+
         document.body.removeChild(this.overlay);
+
         this.overlay = null;
     }
 
@@ -309,35 +328,18 @@ export class ComixDownloader {
         let page = 1;
 
         do {
-            const json = (await this.module.fetchJsonWithAxiosInterceptors(
-                `https://comix.to/api/v1/manga/${mangaId}/chapters?page=${page}&limit=100&order[number]=desc`
-            )) as ComixChapterJson;
+            const json = await this.api.getChapterList(mangaId, page);
 
             console.log(json);
 
-            json?.items?.forEach((item) => {
-                chapterList.push(new ComixChapter(this.module, item));
+            json.items.forEach((item) => {
+                chapterList.push(new ComixChapter(this.api, item));
             });
 
             page += 1;
-            hasMoreChapters = json?.meta?.hasNext ?? false;
+            hasMoreChapters = json.meta.hasNext ?? false;
         } while (hasMoreChapters);
 
         return chapterList;
-    }
-
-    private createUI() {
-        if (this.overlay) return;
-
-        document.body.append(
-            createElement("div", {
-                id: "comix-downloader-overlay",
-            })
-        );
-
-        this.overlay = document.getElementById("comix-downloader-overlay");
-
-        const root = createRoot(this.overlay!);
-        root.render(<ComixDownloaderWindow downloader={this} />);
     }
 }

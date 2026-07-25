@@ -1,10 +1,11 @@
+import { ComixApi } from "./comix-api";
 import { ComixDownloader } from "./comix-downloader";
 import { ComixSecureModule } from "./comix-secure-module";
 import { DEFAULT_WAIT_TIMEOUT } from "./constants";
 import { createElement, querySelectorWaitUntil } from "./document-extensions";
 
 async function main(): Promise<void> {
-    let currentPath: string | null = null;
+    let currentPath: string;
 
     function urlChanged() {
         if (location.pathname === currentPath) return;
@@ -18,6 +19,7 @@ async function main(): Promise<void> {
     }
 
     for (const method of ["pushState", "replaceState"] as const) {
+        // eslint-disable-next-line @typescript-eslint/unbound-method
         const original = history[method];
 
         history[method] = function (...args: Parameters<typeof original>) {
@@ -55,27 +57,30 @@ async function main(): Promise<void> {
             AbortSignal.timeout(DEFAULT_WAIT_TIMEOUT)
         ))!;
 
-        rateElement.insertBefore(
-            createElement("button", {
-                type: "button",
-                class: ["btn", "btn--soft"],
-                title: "Download",
-                onclick: () => {
-                    const downloader = new ComixDownloader(module);
-                    downloader.show();
-                },
-                children: [
-                    createElement("i", {
-                        class: ["fa-solid", "fa-download"],
-                    }),
-                    createElement("span", {
-                        textContent: "Download",
-                    }),
-                ],
-            }),
-            rateElement.querySelector("div.mpage__rate-stack")
-        );
+        if (!document.querySelector("#comix-downloader-download-btn")) {
+            rateElement.insertBefore(
+                createElement("button", {
+                    id: "comix-downloader-download-btn",
+                    type: "button",
+                    class: ["btn", "btn--soft"],
+                    title: "Download",
+                    onclick: () => {
+                        const downloader = new ComixDownloader(new ComixApi(module));
+                        downloader.show();
+                    },
+                    children: [
+                        createElement("i", {
+                            class: ["fa-solid", "fa-download"],
+                        }),
+                        createElement("span", {
+                            textContent: "Download",
+                        }),
+                    ],
+                }),
+                rateElement.querySelector("div.mpage__rate-stack")
+            );
+        }
     }
 }
 
-main().catch((error) => console.log(error));
+main.bind(unsafeWindow)().catch((error) => console.log(error));

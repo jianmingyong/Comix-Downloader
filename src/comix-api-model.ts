@@ -1,6 +1,6 @@
 export interface ComixChapterJson {
-    items?: ComixChapterItem[];
-    meta?: {
+    items: ComixChapterItem[];
+    meta: {
         from: number;
         hasNext: boolean;
         hasPrev: boolean;
@@ -14,20 +14,20 @@ export interface ComixChapterJson {
 
 export interface ComixChapterItem {
     createdAtFormatted: string;
-    creator: {
+    creator?: {
         hashId: string;
         id: number;
         name: string;
         url: string;
         username: string;
-    } | null;
-    group: { id: number; name: string } | null;
-    groupId: number | null;
+    };
+    group?: { id: number; name: string };
+    groupId?: number;
     id: number;
     isOfficial: boolean;
     language: string;
     mangaId: number;
-    name: string | null;
+    name: string;
     number: number;
     url: string;
     volume: number;
@@ -35,8 +35,8 @@ export interface ComixChapterItem {
 }
 
 export interface ComixChapterPageJson {
-    pages?: {
-        items?: ComixChapterPageItem[];
+    pages: {
+        items: ComixChapterPageItem[];
     };
 }
 

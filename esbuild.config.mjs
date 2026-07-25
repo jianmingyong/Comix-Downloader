@@ -8,7 +8,6 @@ await esbuild.build({
     platform: "browser",
     format: "iife",
     target: ["es2022"],
-    external: ["jszip"],
     banner: {
         js: readFileSync("tampermonkey-header.txt", { encoding: "utf8" }),
     },

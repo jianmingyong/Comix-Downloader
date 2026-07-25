@@ -9,3 +9,5 @@ export const PAGE_DOWNLOAD_CONCURRENCY = 12;
 export const AsyncFunction = async function () {
     /* empty */
 }.constructor;
+
+export const MAX_ZIP_SIZE = 5 * 1024 * 1024 * 1024; // 5 GB

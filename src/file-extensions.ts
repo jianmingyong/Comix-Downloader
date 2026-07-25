@@ -1,4 +1,4 @@
-export function saveAs(name: string, data: Blob): void {
+export function saveAs(name: string, data: Blob | MediaSource): void {
     const downloadElement = document.createElement("a");
     downloadElement.href = URL.createObjectURL(data);
     downloadElement.download = name;

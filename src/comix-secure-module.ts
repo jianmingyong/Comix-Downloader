@@ -15,12 +15,12 @@ import { createElement, querySelectorWaitUntil } from "./document-extensions";
 import { urlParamsToObject } from "./url-extensions";
 
 export class ComixSecureModule {
-    public static canvasToBlob = HTMLCanvasElement.prototype.toBlob;
-    public static canvasContext2DGetImageData =
+    public static readonly canvasToBlob = HTMLCanvasElement.prototype.toBlob;
+    public static readonly canvasContext2DGetImageData =
         CanvasRenderingContext2D.prototype.getImageData;
 
-    private axios: AxiosInstance = axios.create();
-    private descrambler: Function[] = [];
+    private readonly axios: AxiosInstance = axios.create();
+    private readonly descrambler: Function[] = [];
 
     public async initialize(): Promise<void> {
         const mainModuleElement =
@@ -127,10 +127,10 @@ export class ComixSecureModule {
         );
     }
 
-    public async fetchJsonWithAxiosInterceptors(
+    public async fetchJsonWithAxiosInterceptors<T extends object>(
         url: string,
         config?: AxiosRequestConfig
-    ): Promise<unknown> {
+    ): Promise<T> {
         const inputUrl = new URL(url);
 
         return (
@@ -139,7 +139,7 @@ export class ComixSecureModule {
                 method: config?.method ?? "GET",
                 params: urlParamsToObject(url),
             })
-        ).data;
+        ).data as T;
     }
 
     public async descrambleImage(

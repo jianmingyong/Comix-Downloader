@@ -17,7 +17,8 @@
     "scripts": {
         "build": "node esbuild.config.mjs",
         "lint": "npx eslint .",
-        "package": "npx eslint . && npx prettier . --write && node esbuild.config.mjs"
+        "package": "npx eslint . && npx prettier . --write && node esbuild.config.mjs",
+        "update": "npm update"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
@@ -30,12 +31,12 @@
         "eslint-config-prettier": "^10.1.8",
         "eslint-plugin-react-hooks": "^7.1.1",
         "globals": "^17.7.0",
-        "jszip": "^3.10.1",
         "prettier": "3.9.4",
         "typescript": "^6.0.3",
         "typescript-eslint": "^8.62.1"
     },
     "dependencies": {
+        "@zip.js/zip.js": "^2.8.34",
         "axios": "^1.18.1",
         "react": "^19.2.7",
         "react-dom": "^19.2.7"
