@@ -37,11 +37,6 @@ async function main(): Promise<void> {
         crossorigin: "anonymous",
     });
 
-    GM_addElement("script", {
-        src: "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
-        crossorigin: "anonymous",
-    });
-
     urlChanged();
     addEventListener("popstate", () => queueMicrotask(urlChanged));
 
@@ -65,7 +60,9 @@ async function main(): Promise<void> {
                     class: ["btn", "btn--soft"],
                     title: "Download",
                     onclick: () => {
-                        const downloader = new ComixDownloader(new ComixApi(module));
+                        const downloader = new ComixDownloader(
+                            new ComixApi(module)
+                        );
                         downloader.show();
                     },
                     children: [

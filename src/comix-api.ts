@@ -5,18 +5,25 @@ import { DEFAULT_FETCH_TIMEOUT } from "./constants";
 export class ComixApi {
     private readonly module: ComixSecureModule;
 
-    public constructor(secureModule: ComixSecureModule) {
-        this.module = secureModule;
+    public constructor(module: ComixSecureModule) {
+        this.module = module;
     }
 
-    public getChapterList(id: string, page: number, signal?: AbortSignal): Promise<ComixChapterJson> {
+    public getChapterList(
+        id: string,
+        page: number,
+        signal?: AbortSignal
+    ): Promise<ComixChapterJson> {
         return this.module.fetchJsonWithAxiosInterceptors(
             `https://comix.to/api/v1/manga/${id}/chapters?page=${page}&limit=100&order[number]=desc`,
             { signal: signal ?? AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT) }
         );
     }
 
-    public getChapterPages(id: number, signal?: AbortSignal): Promise<ComixChapterPageJson> {
+    public getChapterPages(
+        id: number,
+        signal?: AbortSignal
+    ): Promise<ComixChapterPageJson> {
         return this.module.fetchJsonWithAxiosInterceptors(
             `https://comix.to/api/v1/chapters/${id}`,
             { signal: signal ?? AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT) }

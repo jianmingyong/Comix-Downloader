@@ -1,13 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
+import { runAllTasks, type ITask } from "../task-extensions";
 import {
-    ComixChapter,
-    ComixDownloadTask,
-    type ComixDownloader,
-} from "../comix-downloader";
-import { runAllTasks } from "../task-extensions";
-import { CHAPTER_DOWNLOAD_CONCURRENCY, MAX_ZIP_SIZE } from "../constants";
-import { sanitizeFilename, saveAs } from "../file-extensions";
-import { ZipWriter } from "@zip.js/zip.js";
+    CHAPTER_DOWNLOAD_CONCURRENCY,
+    DEFAULT_FETCH_TIMEOUT,
+    DEFAULT_MAX_RETRY,
+    PAGE_DOWNLOAD_CONCURRENCY,
+} from "../constants";
+import {
+    resolveFileExtensions,
+    sanitizeFilename,
+    saveAs,
+} from "../file-extensions";
+import { BlobReader, ZipWriter } from "@zip.js/zip.js";
+import type { ComixApi } from "../comix-api";
+import type {
+    ComixChapterItem,
+    ComixChapterPageItem,
+} from "../comix-api-model";
 
 interface ChapterRange {
     min: number;
@@ -17,23 +26,318 @@ interface ChapterRange {
 interface Progress {
     done: number;
     total: number;
-    isZipped: boolean;
+}
+
+type ComixDownloadProgressCallback = (progress: Progress) => void;
+
+class ComixChapter {
+    private readonly item: ComixChapterItem;
+
+    private readonly _group: string | null;
+    private readonly _outputFileName: string;
+
+    public constructor(item: ComixChapterItem) {
+        this.item = item;
+
+        let outputFileName = "";
+
+        if (item.volume > 0) {
+            outputFileName += `Vol. ${String(item.volume).padStart(3, "0")} `;
+        }
+
+        if (item.number != null) {
+            outputFileName += `Chapter ${String(item.number).padStart(3, "0")} `;
+        }
+
+        if (item.name) {
+            outputFileName += `- ${item.name} `;
+        }
+
+        if (item.group?.name) {
+            outputFileName += `[${item.group.name}] `;
+        } else if (item.isOfficial) {
+            outputFileName += "[Official] ";
+        } else if (item.creator?.name) {
+            outputFileName += `[${item.creator.name}] `;
+        }
+
+        this._group =
+            item.group?.name ??
+            (item.isOfficial ? "Official" : null) ??
+            item.creator?.name ??
+            null;
+        this._outputFileName = sanitizeFilename(`${outputFileName.trim()}.cbz`);
+    }
+
+    public get id(): number {
+        return this.item.id;
+    }
+
+    public get volume(): number {
+        return this.item.volume;
+    }
+
+    public get chapter(): number {
+        return this.item.number;
+    }
+
+    public get title(): string {
+        return this.item.name;
+    }
+
+    public get group(): string | null {
+        return this._group;
+    }
+
+    public get outputFileName(): string {
+        return this._outputFileName;
+    }
+}
+
+class ComixDownloadTask implements ITask<FileSystemFileHandle> {
+    private readonly api: ComixApi;
+    private readonly chapter: ComixChapter;
+
+    private tasks: ComixPageDownloadTask[] = [];
+    private done: number = 0;
+
+    private progressCallback: ComixDownloadProgressCallback;
+
+    public constructor(
+        api: ComixApi,
+        chapter: ComixChapter,
+        progressCallback: ComixDownloadProgressCallback
+    ) {
+        this.api = api;
+        this.chapter = chapter;
+        this.progressCallback = progressCallback;
+    }
+
+    public async start(signal?: AbortSignal): Promise<FileSystemFileHandle> {
+        signal?.throwIfAborted();
+
+        const abortSignal = signal
+            ? AbortSignal.any([
+                  AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
+                  signal,
+              ])
+            : AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT);
+
+        const json = await this.api.getChapterPages(
+            this.chapter.id,
+            abortSignal
+        );
+
+        const opfsDirectory = await navigator.storage.getDirectory();
+        const fileHandle = await opfsDirectory.getFileHandle(
+            this.chapter.outputFileName,
+            {
+                create: true,
+            }
+        );
+        const writableFileStream = await fileHandle.createWritable({
+            keepExistingData: false,
+        });
+        const zipWriter = new ZipWriter<FileSystemWritableFileStream>(
+            writableFileStream,
+            {
+                compressionMethod: 8,
+                level: 9,
+            }
+        );
+
+        json.pages.items.forEach((item, index, array) => {
+            this.tasks.push(
+                new ComixPageDownloadTask(
+                    this.api,
+                    item,
+                    index,
+                    index + 1 == array.length,
+                    zipWriter,
+                    () => {
+                        this.progressCallback({
+                            done: ++this.done,
+                            total: this.tasks.length,
+                        });
+                    }
+                )
+            );
+        });
+
+        this.progressCallback({
+            done: 0,
+            total: this.tasks.length,
+        });
+
+        await runAllTasks(this.tasks, PAGE_DOWNLOAD_CONCURRENCY, signal);
+        await zipWriter.close();
+
+        return fileHandle;
+    }
+}
+
+class ComixPageDownloadTask implements ITask<void> {
+    private readonly api: ComixApi;
+    private readonly item: ComixChapterPageItem;
+    private readonly index: number;
+    private readonly isLast: boolean;
+    private readonly zipWriter: ZipWriter<FileSystemWritableFileStream>;
+    private readonly doneCallback: Function;
+
+    private retry: number = 0;
+
+    public constructor(
+        api: ComixApi,
+        item: ComixChapterPageItem,
+        index: number,
+        isLast: boolean,
+        zipWriter: ZipWriter<FileSystemWritableFileStream>,
+        doneCallback: Function
+    ) {
+        this.api = api;
+        this.item = item;
+        this.index = index;
+        this.isLast = isLast;
+        this.zipWriter = zipWriter;
+        this.doneCallback = doneCallback;
+    }
+
+    public async start(signal?: AbortSignal): Promise<void> {
+        do {
+            signal?.throwIfAborted();
+
+            try {
+                const abortSignal = signal
+                    ? AbortSignal.any([
+                          AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
+                          signal,
+                      ])
+                    : AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT);
+
+                if (this.item.s) {
+                    // Scrambled Pages
+                    const canvas = document.createElement("canvas");
+                    canvas.width = this.item.width;
+                    canvas.height = this.item.height;
+
+                    const data = await this.api.descrambleImage(
+                        this.item.url,
+                        canvas,
+                        abortSignal
+                    );
+
+                    const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
+                    await this.zipWriter.add(
+                        outputFileName,
+                        new BlobReader(data)
+                    );
+                } else {
+                    // Unscrambled Pages
+                    const response = await fetch(this.item.url, {
+                        signal: abortSignal,
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(
+                            `Response returned ${response.status}: ${response.statusText}`
+                        );
+                    }
+
+                    let blob = await response.blob();
+                    let fileExtensions = resolveFileExtensions(
+                        response.headers.get("content-type") ?? ""
+                    );
+
+                    if (this.isLast) {
+                        blob = await this.api.removeBanner(
+                            blob,
+                            this.item.width,
+                            this.item.height
+                        );
+                        fileExtensions = "png";
+                    }
+
+                    const outputFileName = `${String(this.index).padStart(3, "0")}.${fileExtensions}`;
+                    await this.zipWriter.add(
+                        outputFileName,
+                        new BlobReader(blob)
+                    );
+                }
+
+                this.doneCallback();
+                return;
+            } catch {
+                this.retry++;
+            }
+        } while (this.retry < DEFAULT_MAX_RETRY);
+
+        throw new Error(`Max retry reached when downloading an image`);
+    }
+}
+
+function useComixChapterList(api: ComixApi) {
+    const [chapterList, setChapterList] = useState<ComixChapter[]>();
+
+    useEffect(() => {
+        async function getChapterList(): Promise<ComixChapter[]> {
+            const mangaId = document.URL.replace(
+                "https://comix.to/title/",
+                ""
+            ).split("-")[0]!;
+
+            const chapterList: ComixChapter[] = [];
+
+            let hasMoreChapters = true;
+            let page = 1;
+
+            do {
+                const json = await api.getChapterList(mangaId, page);
+                console.log(json);
+
+                json.items.forEach((item) => {
+                    chapterList.push(new ComixChapter(item));
+                });
+
+                page += 1;
+                hasMoreChapters = json.meta.hasNext ?? false;
+            } while (hasMoreChapters);
+
+            return chapterList;
+        }
+
+        getChapterList().then(
+            (list) => setChapterList(list),
+            (error) => console.log(error)
+        );
+    }, [api]);
+
+    return chapterList;
+}
+
+function createComixDownloadTask(
+    api: ComixApi,
+    chapter: ComixChapter,
+    progressCallback: ComixDownloadProgressCallback
+) {
+    return new ComixDownloadTask(api, chapter, progressCallback);
 }
 
 export function ComixDownloaderWindow({
-    downloader,
+    api,
+    signal,
+    onClose,
 }: {
-    downloader: ComixDownloader;
+    api: ComixApi;
+    signal: AbortSignal;
+    onClose: () => void;
 }) {
-    const [chapterList, setChapterList] = useState<ComixChapter[]>();
+    const chapterList = useComixChapterList(api);
+
     const [selectedGroups, setSelectedGroups] = useState<Set<string>>(
         new Set()
     );
     const [selectedChapterRange, setSelectedChapterRange] =
         useState<ChapterRange>({ min: 0, max: 0 });
-
-    const [isDownloading, setIsDownloading] = useState(false);
-    const [progress, setProgress] = useState<Record<number, Progress>>({});
 
     const { groups, minChapterValue, maxChapterValue } = useMemo(() => {
         if (!chapterList) {
@@ -45,9 +349,9 @@ export function ComixDownloaderWindow({
         } else {
             const groups = new Set<string>();
 
-            chapterList.forEach((chapterList) => {
-                if (chapterList.group) {
-                    groups.add(chapterList.group);
+            chapterList.forEach((chapter) => {
+                if (chapter.group) {
+                    groups.add(chapter.group);
                 }
             });
 
@@ -64,6 +368,8 @@ export function ComixDownloaderWindow({
         }
     }, [chapterList]);
 
+    const [isDownloading, setIsDownloading] = useState(false);
+
     const chaptersToDownload = useMemo(() => {
         if (!chapterList) {
             return null;
@@ -79,6 +385,8 @@ export function ComixDownloaderWindow({
         }
     }, [chapterList, selectedGroups, selectedChapterRange]);
 
+    const [progress, setProgress] = useState<Record<number, Progress>>({});
+
     const globalProgress = useMemo(() => {
         return Object.values(progress).reduce(
             (prev, curr) => {
@@ -93,10 +401,6 @@ export function ComixDownloaderWindow({
         );
     }, [progress]);
 
-    useEffect(() => {
-        downloader.fetchChapterList().then(setChapterList).catch(console.log);
-    }, []);
-
     function onclickDownload() {
         setIsDownloading(true);
 
@@ -105,17 +409,16 @@ export function ComixDownloaderWindow({
 
         chaptersToDownload?.forEach((chapter) => {
             const id = chapter.id;
-            progress[id] = { done: 0, total: 0, isZipped: false };
+            progress[id] = { done: 0, total: 0 };
 
             tasks.push(
-                chapter.createDownloadTask(downloader.signal, (progress) => {
-                    setProgress((value) => {
+                createComixDownloadTask(api, chapter, (progress) => {
+                    setProgress((prev) => {
                         return {
-                            ...value,
+                            ...prev,
                             [id]: {
                                 done: progress.done,
                                 total: progress.total,
-                                isZipped: progress.isZipped,
                             },
                         };
                     });
@@ -125,10 +428,7 @@ export function ComixDownloaderWindow({
 
         setProgress(progress);
 
-        runAllTasks(
-            tasks.map((t) => () => t.start()),
-            CHAPTER_DOWNLOAD_CONCURRENCY
-        )
+        runAllTasks(tasks, CHAPTER_DOWNLOAD_CONCURRENCY, signal)
             .then(async (fileHandles) => {
                 const opfsDirectory = await navigator.storage.getDirectory();
                 const title =
@@ -167,6 +467,21 @@ export function ComixDownloaderWindow({
             })
             .catch(console.log)
             .finally(() => {
+                async function cleanUp() {
+                    const opfsDirectory =
+                        await navigator.storage.getDirectory();
+
+                    for await (let [key, value] of opfsDirectory.entries()) {
+                        if (!key.endsWith(".cbz") && !key.endsWith(".zip"))
+                            continue;
+
+                        if (value instanceof FileSystemFileHandle) {
+                            await opfsDirectory.removeEntry(key);
+                        }
+                    }
+                }
+
+                cleanUp().catch((error) => console.log(error));
                 setIsDownloading(false);
             });
     }
@@ -177,7 +492,7 @@ export function ComixDownloaderWindow({
                 <span style={{ fontSize: "1.5rem" }}>Comix Downloader</span>
                 <button
                     style={{ position: "absolute", top: "1rem", right: "1rem" }}
-                    onClick={downloader.close.bind(downloader)}
+                    onClick={onClose}
                 >
                     ✕
                 </button>
@@ -210,19 +525,15 @@ export function ComixDownloaderWindow({
                                     value={group}
                                     disabled={isDownloading}
                                     onChange={(event) => {
-                                        if (event.target.checked) {
-                                            const newSet = new Set(
-                                                selectedGroups
-                                            );
-                                            newSet.add(group);
-                                            setSelectedGroups(newSet);
-                                        } else {
-                                            const newSet = new Set(
-                                                selectedGroups
-                                            );
-                                            newSet.delete(group);
-                                            setSelectedGroups(newSet);
-                                        }
+                                        setSelectedGroups((prev) => {
+                                            const newSet = new Set(prev);
+                                            if (event.target.checked) {
+                                                newSet.add(group);
+                                            } else {
+                                                newSet.delete(group);
+                                            }
+                                            return newSet;
+                                        });
                                     }}
                                 />
                                 <label
@@ -271,16 +582,17 @@ export function ComixDownloaderWindow({
                                 }
                                 style={{ width: "100px" }}
                                 onChange={(event) => {
-                                    setSelectedChapterRange({
-                                        ...selectedChapterRange,
-                                        min: Math.max(
-                                            Math.min(
-                                                maxChapterValue!,
-                                                selectedChapterRange.max,
-                                                event.target.valueAsNumber
+                                    setSelectedChapterRange((prev) => {
+                                        return {
+                                            ...prev,
+                                            min: Math.max(
+                                                Math.min(
+                                                    prev.max,
+                                                    event.target.valueAsNumber
+                                                ),
+                                                minChapterValue!
                                             ),
-                                            minChapterValue!
-                                        ),
+                                        };
                                     });
                                 }}
                             />
@@ -309,16 +621,17 @@ export function ComixDownloaderWindow({
                                 }
                                 style={{ width: "100px" }}
                                 onChange={(event) => {
-                                    setSelectedChapterRange({
-                                        ...selectedChapterRange,
-                                        max: Math.max(
-                                            Math.min(
-                                                maxChapterValue!,
-                                                event.target.valueAsNumber
+                                    setSelectedChapterRange((prev) => {
+                                        return {
+                                            ...prev,
+                                            max: Math.min(
+                                                Math.max(
+                                                    prev.min,
+                                                    event.target.valueAsNumber
+                                                ),
+                                                maxChapterValue!
                                             ),
-                                            minChapterValue!,
-                                            selectedChapterRange.min
-                                        ),
+                                        };
                                     });
                                 }}
                             />
@@ -411,23 +724,16 @@ export function ComixDownloaderWindow({
                                                 {progress[chapter.id] &&
                                                     (progress[chapter.id]
                                                         ?.total == 0 ? (
-                                                        <progress />
-                                                    ) : progress[chapter.id]
-                                                          ?.done ===
-                                                      progress[chapter.id]
-                                                          ?.total ? (
                                                         <progress
-                                                            max={1}
-                                                            value={
-                                                                progress[
-                                                                    chapter.id
-                                                                ]?.isZipped
-                                                                    ? 1
-                                                                    : undefined
-                                                            }
+                                                            style={{
+                                                                width: "100%",
+                                                            }}
                                                         />
                                                     ) : (
                                                         <progress
+                                                            style={{
+                                                                width: "100%",
+                                                            }}
                                                             max={
                                                                 progress[
                                                                     chapter.id

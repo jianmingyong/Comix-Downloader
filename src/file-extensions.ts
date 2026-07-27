@@ -21,3 +21,22 @@ export function sanitizeFilename(name: string) {
             .trim()
     );
 }
+
+export function resolveFileExtensions(mineType: string): string {
+    switch (mineType) {
+        case "image/jpeg":
+            return "jpg";
+
+        case "image/png":
+            return "png";
+
+        case "image/webp":
+            return "webp";
+
+        case "image/gif":
+            return "gif";
+
+        default:
+            return "png";
+    }
+}

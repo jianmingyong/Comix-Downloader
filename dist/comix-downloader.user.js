@@ -84,8 +84,8 @@
       init_constants();
       ComixApi = class {
         module;
-        constructor(secureModule) {
-          this.module = secureModule;
+        constructor(module) {
+          this.module = module;
         }
         getChapterList(id, page, signal) {
           return this.module.fetchJsonWithAxiosInterceptors(
@@ -21534,7 +21534,7 @@
   });
 
   // src/task-extensions.ts
-  function runAllTasks(tasks, concurrency) {
+  function runAllTasks(tasks, concurrency, signal) {
     return new Promise((resolve, reject) => {
       let counter = 0;
       const runningTasks = [];
@@ -21545,10 +21545,10 @@
         const index = counter++;
         const taskToRun = tasks[index];
         if (index < tasks.length) {
-          runningTasks[index] = taskToRun();
-          runningTasks[index].then(runPromise).catch(reject);
+          runningTasks[index] = taskToRun.start(signal);
+          runningTasks[index].then(runPromise, reject);
         } else if (index === tasks.length) {
-          Promise.all(runningTasks).then(resolve).catch(reject);
+          Promise.all(runningTasks).then(resolve, reject);
         }
       }
     });
@@ -21573,6 +21573,20 @@
       name = "_" + name;
     }
     return name.replace(/[<>:"/\\|?*\x00-\x1F]/g, "").replace(/[. ]+$/g, "").trim();
+  }
+  function resolveFileExtensions(mineType) {
+    switch (mineType) {
+      case "image/jpeg":
+        return "jpg";
+      case "image/png":
+        return "png";
+      case "image/webp":
+        return "webp";
+      case "image/gif":
+        return "gif";
+      default:
+        return "png";
+    }
   }
   var init_file_extensions = __esm({
     "src/file-extensions.ts"() {
@@ -27435,16 +27449,48 @@
   });
 
   // src/downloader-ui/comix-downloader-window.tsx
-  function ComixDownloaderWindow({
-    downloader
-  }) {
+  function useComixChapterList(api) {
     const [chapterList, setChapterList] = (0, import_react.useState)();
+    (0, import_react.useEffect)(() => {
+      async function getChapterList() {
+        const mangaId = document.URL.replace(
+          "https://comix.to/title/",
+          ""
+        ).split("-")[0];
+        const chapterList2 = [];
+        let hasMoreChapters = true;
+        let page = 1;
+        do {
+          const json = await api.getChapterList(mangaId, page);
+          console.log(json);
+          json.items.forEach((item) => {
+            chapterList2.push(new ComixChapter(item));
+          });
+          page += 1;
+          hasMoreChapters = json.meta.hasNext ?? false;
+        } while (hasMoreChapters);
+        return chapterList2;
+      }
+      getChapterList().then(
+        (list) => setChapterList(list),
+        (error) => console.log(error)
+      );
+    }, [api]);
+    return chapterList;
+  }
+  function createComixDownloadTask(api, chapter, progressCallback) {
+    return new ComixDownloadTask(api, chapter, progressCallback);
+  }
+  function ComixDownloaderWindow({
+    api,
+    signal,
+    onClose
+  }) {
+    const chapterList = useComixChapterList(api);
     const [selectedGroups, setSelectedGroups] = (0, import_react.useState)(
       /* @__PURE__ */ new Set()
     );
     const [selectedChapterRange, setSelectedChapterRange] = (0, import_react.useState)({ min: 0, max: 0 });
-    const [isDownloading, setIsDownloading] = (0, import_react.useState)(false);
-    const [progress, setProgress] = (0, import_react.useState)({});
     const { groups, minChapterValue, maxChapterValue } = (0, import_react.useMemo)(() => {
       if (!chapterList) {
         return {
@@ -27454,9 +27500,9 @@
         };
       } else {
         const groups2 = /* @__PURE__ */ new Set();
-        chapterList.forEach((chapterList2) => {
-          if (chapterList2.group) {
-            groups2.add(chapterList2.group);
+        chapterList.forEach((chapter) => {
+          if (chapter.group) {
+            groups2.add(chapter.group);
           }
         });
         const min = Math.min(...chapterList.map((v) => v.chapter));
@@ -27469,6 +27515,7 @@
         };
       }
     }, [chapterList]);
+    const [isDownloading, setIsDownloading] = (0, import_react.useState)(false);
     const chaptersToDownload = (0, import_react.useMemo)(() => {
       if (!chapterList) {
         return null;
@@ -27478,6 +27525,7 @@
         );
       }
     }, [chapterList, selectedGroups, selectedChapterRange]);
+    const [progress, setProgress] = (0, import_react.useState)({});
     const globalProgress = (0, import_react.useMemo)(() => {
       return Object.values(progress).reduce(
         (prev, curr) => {
@@ -27489,25 +27537,21 @@
         { done: 0, total: 0 }
       );
     }, [progress]);
-    (0, import_react.useEffect)(() => {
-      downloader.fetchChapterList().then(setChapterList).catch(console.log);
-    }, []);
     function onclickDownload() {
       setIsDownloading(true);
       const tasks = [];
       const progress2 = {};
       chaptersToDownload?.forEach((chapter) => {
         const id = chapter.id;
-        progress2[id] = { done: 0, total: 0, isZipped: false };
+        progress2[id] = { done: 0, total: 0 };
         tasks.push(
-          chapter.createDownloadTask(downloader.signal, (progress3) => {
-            setProgress((value) => {
+          createComixDownloadTask(api, chapter, (progress3) => {
+            setProgress((prev) => {
               return {
-                ...value,
+                ...prev,
                 [id]: {
                   done: progress3.done,
-                  total: progress3.total,
-                  isZipped: progress3.isZipped
+                  total: progress3.total
                 }
               };
             });
@@ -27515,10 +27559,7 @@
         );
       });
       setProgress(progress2);
-      runAllTasks(
-        tasks.map((t3) => () => t3.start()),
-        CHAPTER_DOWNLOAD_CONCURRENCY
-      ).then(async (fileHandles) => {
+      runAllTasks(tasks, CHAPTER_DOWNLOAD_CONCURRENCY, signal).then(async (fileHandles) => {
         const opfsDirectory = await navigator.storage.getDirectory();
         const title = document.querySelector("h1.mpage__title")?.textContent;
         let fileHandle = await opfsDirectory.getFileHandle(
@@ -27549,6 +27590,17 @@
         }
         await opfsDirectory.removeEntry(fileHandle.name);
       }).catch(console.log).finally(() => {
+        async function cleanUp() {
+          const opfsDirectory = await navigator.storage.getDirectory();
+          for await (let [key, value] of opfsDirectory.entries()) {
+            if (!key.endsWith(".cbz") && !key.endsWith(".zip"))
+              continue;
+            if (value instanceof FileSystemFileHandle) {
+              await opfsDirectory.removeEntry(key);
+            }
+          }
+        }
+        cleanUp().catch((error) => console.log(error));
         setIsDownloading(false);
       });
     }
@@ -27559,7 +27611,7 @@
           "button",
           {
             style: { position: "absolute", top: "1rem", right: "1rem" },
-            onClick: downloader.close.bind(downloader),
+            onClick: onClose,
             children: "\u2715"
           }
         )
@@ -27594,19 +27646,15 @@
                       value: group,
                       disabled: isDownloading,
                       onChange: (event) => {
-                        if (event.target.checked) {
-                          const newSet = new Set(
-                            selectedGroups
-                          );
-                          newSet.add(group);
-                          setSelectedGroups(newSet);
-                        } else {
-                          const newSet = new Set(
-                            selectedGroups
-                          );
-                          newSet.delete(group);
-                          setSelectedGroups(newSet);
-                        }
+                        setSelectedGroups((prev) => {
+                          const newSet = new Set(prev);
+                          if (event.target.checked) {
+                            newSet.add(group);
+                          } else {
+                            newSet.delete(group);
+                          }
+                          return newSet;
+                        });
                       }
                     }
                   ),
@@ -27659,16 +27707,17 @@
                         disabled: minChapterValue == null || maxChapterValue == null || isDownloading,
                         style: { width: "100px" },
                         onChange: (event) => {
-                          setSelectedChapterRange({
-                            ...selectedChapterRange,
-                            min: Math.max(
-                              Math.min(
-                                maxChapterValue,
-                                selectedChapterRange.max,
-                                event.target.valueAsNumber
-                              ),
-                              minChapterValue
-                            )
+                          setSelectedChapterRange((prev) => {
+                            return {
+                              ...prev,
+                              min: Math.max(
+                                Math.min(
+                                  prev.max,
+                                  event.target.valueAsNumber
+                                ),
+                                minChapterValue
+                              )
+                            };
                           });
                         }
                       }
@@ -27698,16 +27747,17 @@
                         disabled: minChapterValue == null || maxChapterValue == null || isDownloading,
                         style: { width: "100px" },
                         onChange: (event) => {
-                          setSelectedChapterRange({
-                            ...selectedChapterRange,
-                            max: Math.max(
-                              Math.min(
-                                maxChapterValue,
-                                event.target.valueAsNumber
-                              ),
-                              minChapterValue,
-                              selectedChapterRange.min
-                            )
+                          setSelectedChapterRange((prev) => {
+                            return {
+                              ...prev,
+                              max: Math.min(
+                                Math.max(
+                                  prev.min,
+                                  event.target.valueAsNumber
+                                ),
+                                maxChapterValue
+                              )
+                            };
                           });
                         }
                       }
@@ -27801,15 +27851,19 @@
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: chapter.title }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: chapter.group }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: chapter.outputFileName }),
-              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: progress[chapter.id] && (progress[chapter.id]?.total == 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("progress", {}) : progress[chapter.id]?.done === progress[chapter.id]?.total ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("td", { children: progress[chapter.id] && (progress[chapter.id]?.total == 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                 "progress",
                 {
-                  max: 1,
-                  value: progress[chapter.id]?.isZipped ? 1 : void 0
+                  style: {
+                    width: "100%"
+                  }
                 }
               ) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                 "progress",
                 {
+                  style: {
+                    width: "100%"
+                  },
                   max: progress[chapter.id]?.total,
                   value: progress[chapter.id]?.done
                 }
@@ -27820,17 +27874,199 @@
       ] }) })
     ] });
   }
-  var import_react, import_jsx_runtime;
+  var import_react, import_jsx_runtime, ComixChapter, ComixDownloadTask, ComixPageDownloadTask;
   var init_comix_downloader_window = __esm({
     "src/downloader-ui/comix-downloader-window.tsx"() {
       "use strict";
       import_react = __toESM(require_react());
-      init_comix_downloader();
       init_task_extensions();
       init_constants();
       init_file_extensions();
       init_zip();
       import_jsx_runtime = __toESM(require_jsx_runtime());
+      ComixChapter = class {
+        item;
+        _group;
+        _outputFileName;
+        constructor(item) {
+          this.item = item;
+          let outputFileName = "";
+          if (item.volume > 0) {
+            outputFileName += `Vol. ${String(item.volume).padStart(3, "0")} `;
+          }
+          if (item.number != null) {
+            outputFileName += `Chapter ${String(item.number).padStart(3, "0")} `;
+          }
+          if (item.name) {
+            outputFileName += `- ${item.name} `;
+          }
+          if (item.group?.name) {
+            outputFileName += `[${item.group.name}] `;
+          } else if (item.isOfficial) {
+            outputFileName += "[Official] ";
+          } else if (item.creator?.name) {
+            outputFileName += `[${item.creator.name}] `;
+          }
+          this._group = item.group?.name ?? (item.isOfficial ? "Official" : null) ?? item.creator?.name ?? null;
+          this._outputFileName = sanitizeFilename(`${outputFileName.trim()}.cbz`);
+        }
+        get id() {
+          return this.item.id;
+        }
+        get volume() {
+          return this.item.volume;
+        }
+        get chapter() {
+          return this.item.number;
+        }
+        get title() {
+          return this.item.name;
+        }
+        get group() {
+          return this._group;
+        }
+        get outputFileName() {
+          return this._outputFileName;
+        }
+      };
+      ComixDownloadTask = class {
+        api;
+        chapter;
+        tasks = [];
+        done = 0;
+        progressCallback;
+        constructor(api, chapter, progressCallback) {
+          this.api = api;
+          this.chapter = chapter;
+          this.progressCallback = progressCallback;
+        }
+        async start(signal) {
+          signal?.throwIfAborted();
+          const abortSignal = signal ? AbortSignal.any([
+            AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
+            signal
+          ]) : AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT);
+          const json = await this.api.getChapterPages(
+            this.chapter.id,
+            abortSignal
+          );
+          const opfsDirectory = await navigator.storage.getDirectory();
+          const fileHandle = await opfsDirectory.getFileHandle(
+            this.chapter.outputFileName,
+            {
+              create: true
+            }
+          );
+          const writableFileStream = await fileHandle.createWritable({
+            keepExistingData: false
+          });
+          const zipWriter = new ZipWriter(
+            writableFileStream,
+            {
+              compressionMethod: 8,
+              level: 9
+            }
+          );
+          json.pages.items.forEach((item, index, array) => {
+            this.tasks.push(
+              new ComixPageDownloadTask(
+                this.api,
+                item,
+                index,
+                index + 1 == array.length,
+                zipWriter,
+                () => {
+                  this.progressCallback({
+                    done: ++this.done,
+                    total: this.tasks.length
+                  });
+                }
+              )
+            );
+          });
+          this.progressCallback({
+            done: 0,
+            total: this.tasks.length
+          });
+          await runAllTasks(this.tasks, PAGE_DOWNLOAD_CONCURRENCY, signal);
+          await zipWriter.close();
+          return fileHandle;
+        }
+      };
+      ComixPageDownloadTask = class {
+        api;
+        item;
+        index;
+        isLast;
+        zipWriter;
+        doneCallback;
+        retry = 0;
+        constructor(api, item, index, isLast, zipWriter, doneCallback) {
+          this.api = api;
+          this.item = item;
+          this.index = index;
+          this.isLast = isLast;
+          this.zipWriter = zipWriter;
+          this.doneCallback = doneCallback;
+        }
+        async start(signal) {
+          do {
+            signal?.throwIfAborted();
+            try {
+              const abortSignal = signal ? AbortSignal.any([
+                AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
+                signal
+              ]) : AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT);
+              if (this.item.s) {
+                const canvas = document.createElement("canvas");
+                canvas.width = this.item.width;
+                canvas.height = this.item.height;
+                const data = await this.api.descrambleImage(
+                  this.item.url,
+                  canvas,
+                  abortSignal
+                );
+                const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
+                await this.zipWriter.add(
+                  outputFileName,
+                  new BlobReader(data)
+                );
+              } else {
+                const response = await fetch(this.item.url, {
+                  signal: abortSignal
+                });
+                if (!response.ok) {
+                  throw new Error(
+                    `Response returned ${response.status}: ${response.statusText}`
+                  );
+                }
+                let blob = await response.blob();
+                let fileExtensions = resolveFileExtensions(
+                  response.headers.get("content-type") ?? ""
+                );
+                if (this.isLast) {
+                  blob = await this.api.removeBanner(
+                    blob,
+                    this.item.width,
+                    this.item.height
+                  );
+                  fileExtensions = "png";
+                }
+                const outputFileName = `${String(this.index).padStart(3, "0")}.${fileExtensions}`;
+                await this.zipWriter.add(
+                  outputFileName,
+                  new BlobReader(blob)
+                );
+              }
+              this.doneCallback();
+              return;
+            } catch {
+              this.retry++;
+            }
+          } while (this.retry < DEFAULT_MAX_RETRY);
+          throw new Error(`Max retry reached when downloading an image`);
+        }
+      };
     }
   });
 
@@ -27913,252 +28149,54 @@
   });
 
   // src/comix-downloader.tsx
-  var import_client, import_jsx_runtime2, ComixChapter2, ComixDownloadTask2, ComixPageDownloadTask, ComixDownloader;
+  var import_client, import_jsx_runtime2, ComixDownloader;
   var init_comix_downloader = __esm({
     "src/comix-downloader.tsx"() {
       "use strict";
       import_client = __toESM(require_client());
       init_comix_downloader_window();
-      init_constants();
       init_document_extensions();
-      init_file_extensions();
-      init_task_extensions();
-      init_zip();
       import_jsx_runtime2 = __toESM(require_jsx_runtime());
-      ComixChapter2 = class {
-        _group;
-        _outputFileName;
-        api;
-        item;
-        constructor(api, item) {
-          this.api = api;
-          this.item = item;
-          let outputFileName = "";
-          if (item.volume > 0) {
-            outputFileName += `Vol. ${String(item.volume).padStart(3, "0")} `;
-          }
-          if (item.number != null) {
-            outputFileName += `Chapter ${String(item.number).padStart(3, "0")} `;
-          }
-          if (item.name) {
-            outputFileName += `- ${item.name} `;
-          }
-          if (item.group?.name) {
-            outputFileName += `[${item.group.name}] `;
-          } else if (item.isOfficial) {
-            outputFileName += "[Official] ";
-          } else if (item.creator?.name) {
-            outputFileName += `[${item.creator.name}] `;
-          }
-          this._group = item.group?.name ?? (item.isOfficial ? "Official" : null) ?? item.creator?.name ?? null;
-          this._outputFileName = sanitizeFilename(`${outputFileName.trim()}.cbz`);
-        }
-        get id() {
-          return this.item.id;
-        }
-        get volume() {
-          return this.item.volume;
-        }
-        get chapter() {
-          return this.item.number;
-        }
-        get title() {
-          return this.item.name;
-        }
-        get isOfficial() {
-          return this.item.isOfficial;
-        }
-        get group() {
-          return this._group;
-        }
-        get outputFileName() {
-          return this._outputFileName;
-        }
-        createDownloadTask(signal, progressCallback) {
-          return new ComixDownloadTask2(
-            this.api,
-            this,
-            signal,
-            progressCallback
-          );
-        }
-      };
-      ComixDownloadTask2 = class {
-        api;
-        chapter;
-        signal;
-        task = [];
-        done = 0;
-        progressCallback;
-        constructor(api, chapter, signal, progressCallback) {
-          this.api = api;
-          this.chapter = chapter;
-          this.signal = signal;
-          this.progressCallback = progressCallback;
-        }
-        async start() {
-          this.signal.throwIfAborted();
-          const json = await this.api.getChapterPages(this.chapter.id, AbortSignal.any([
-            AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
-            this.signal
-          ]));
-          const opfsDirectory = await navigator.storage.getDirectory();
-          const fileHandle = await opfsDirectory.getFileHandle(this.chapter.outputFileName, {
-            create: true
-          });
-          const writableFileStream = await fileHandle.createWritable({ keepExistingData: false });
-          const zipWriter = new ZipWriter(writableFileStream, {
-            compressionMethod: 8,
-            level: 9
-          });
-          json.pages.items.forEach((item, index, array) => {
-            this.task.push(
-              new ComixPageDownloadTask(
-                this.api,
-                item,
-                index,
-                index + 1 == array.length,
-                zipWriter,
-                this.signal,
-                () => {
-                  this.progressCallback({
-                    done: ++this.done,
-                    total: this.task.length,
-                    isZipped: false
-                  });
-                }
-              )
-            );
-          });
-          this.progressCallback({ done: 0, total: this.task.length, isZipped: false });
-          await runAllTasks(
-            this.task.map((t3) => () => t3.start()),
-            PAGE_DOWNLOAD_CONCURRENCY
-          );
-          await zipWriter.close();
-          this.progressCallback({ done: this.done, total: this.task.length, isZipped: true });
-          return fileHandle;
-        }
-      };
-      ComixPageDownloadTask = class {
-        api;
-        item;
-        index;
-        isLast;
-        zipWriter;
-        signal;
-        doneCallback;
-        retry = 0;
-        constructor(api, item, index, isLast, zipWriter, signal, doneCallback) {
-          this.api = api;
-          this.item = item;
-          this.index = index;
-          this.isLast = isLast;
-          this.zipWriter = zipWriter;
-          this.signal = signal;
-          this.doneCallback = doneCallback;
-        }
-        async start() {
-          do {
-            this.signal.throwIfAborted();
-            try {
-              if (this.item.s) {
-                const canvas = document.createElement("canvas");
-                canvas.width = this.item.width;
-                canvas.height = this.item.height;
-                const data = await this.api.descrambleImage(
-                  this.item.url,
-                  canvas,
-                  AbortSignal.any([
-                    AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
-                    this.signal
-                  ])
-                );
-                const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
-                await this.zipWriter.add(outputFileName, new BlobReader(data));
-              } else {
-                const response = await fetch(this.item.url, {
-                  signal: AbortSignal.any([
-                    AbortSignal.timeout(DEFAULT_FETCH_TIMEOUT),
-                    this.signal
-                  ])
-                });
-                if (!response.ok) {
-                  throw new Error(
-                    `Response returned ${response.status}: ${response.statusText}`
-                  );
-                }
-                let blob = await response.blob();
-                if (this.isLast) {
-                  blob = await this.api.removeBanner(blob, this.item.width, this.item.height);
-                }
-                const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
-                await this.zipWriter.add(outputFileName, new BlobReader(blob));
-              }
-              this.doneCallback();
-              return;
-            } catch {
-              this.retry++;
-            }
-          } while (this.retry < DEFAULT_MAX_RETRY);
-          throw new Error(`Max retry reached when downloading an image`);
-        }
-      };
       ComixDownloader = class {
         static {
           GM_addStyle(
             "#comix-downloader-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; justify-content: center; align-items: center; z-index: 9999; }"
           );
           GM_addStyle(
-            "#comix-downloader-window { width: 75%; max-height: 75vh; overflow: auto; color: white; background: #333; border-radius: 10px; box-shadow: 0 15px 40px rgba(0, 0, 0, 0.35); padding: 1rem; position: relative; }"
+            "#comix-downloader-window { width: 75%; height: 80vh; max-height: 80vh; overflow: auto; color: white; background: #333; border-radius: 10px; box-shadow: 0 15px 40px rgba(0, 0, 0, 0.35); padding: 1rem; position: relative; }"
           );
         }
         api;
-        abortController = null;
-        overlay = null;
-        get signal() {
-          if (!this.abortController) throw new Error("Abort Controller does not exist...");
-          return this.abortController.signal;
-        }
         constructor(api) {
           this.api = api;
         }
         show() {
-          if (this.overlay) return;
-          this.abortController = new AbortController();
+          if (document.getElementById("comix-downloader-overlay")) return;
           document.body.append(
             createElement("div", {
               id: "comix-downloader-overlay"
             })
           );
-          this.overlay = document.getElementById("comix-downloader-overlay");
-          const root = (0, import_client.createRoot)(this.overlay);
-          root.render(/* @__PURE__ */ (0, import_jsx_runtime2.jsx)(ComixDownloaderWindow, { downloader: this }));
-        }
-        close() {
-          if (!this.overlay) return;
-          this.abortController?.abort();
-          document.body.removeChild(this.overlay);
-          this.overlay = null;
-        }
-        async fetchChapterList() {
-          const mangaId = document.URL.replace(
-            "https://comix.to/title/",
-            ""
-          ).split("-")[0];
-          const chapterList = [];
-          let hasMoreChapters = true;
-          let page = 1;
-          do {
-            const json = await this.api.getChapterList(mangaId, page);
-            console.log(json);
-            json.items.forEach((item) => {
-              chapterList.push(new ComixChapter2(this.api, item));
-            });
-            page += 1;
-            hasMoreChapters = json.meta.hasNext ?? false;
-          } while (hasMoreChapters);
-          return chapterList;
+          const overlay = document.getElementById("comix-downloader-overlay");
+          if (!overlay) throw new Error(`Overlay does not exists`);
+          const abortController = new AbortController();
+          const root = (0, import_client.createRoot)(overlay);
+          root.render(
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+              ComixDownloaderWindow,
+              {
+                api: this.api,
+                signal: abortController.signal,
+                onClose
+              }
+            )
+          );
+          function onClose() {
+            if (!overlay) throw new Error(`Overlay does not exists`);
+            abortController.abort();
+            root.unmount();
+            document.body.removeChild(overlay);
+          }
         }
       };
     }
@@ -32244,10 +32282,6 @@
           src: "https://kit.fontawesome.com/e5e217aee3.js",
           crossorigin: "anonymous"
         });
-        GM_addElement("script", {
-          src: "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
-          crossorigin: "anonymous"
-        });
         urlChanged();
         addEventListener("popstate", () => queueMicrotask(urlChanged));
         async function inject() {
@@ -32264,7 +32298,9 @@
                 class: ["btn", "btn--soft"],
                 title: "Download",
                 onclick: () => {
-                  const downloader = new ComixDownloader(new ComixApi(module2));
+                  const downloader = new ComixDownloader(
+                    new ComixApi(module2)
+                  );
                   downloader.show();
                 },
                 children: [

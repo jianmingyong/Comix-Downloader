@@ -1,8 +1,11 @@
-type Task<T> = () => Promise<T>;
+export interface ITask<T> {
+    start(signal?: AbortSignal): Promise<T>;
+}
 
 export function runAllTasks<T>(
-    tasks: Task<T>[],
-    concurrency: number
+    tasks: ITask<T>[],
+    concurrency: number,
+    signal?: AbortSignal
 ): Promise<Awaited<T>[]> {
     return new Promise((resolve, reject) => {
         let counter = 0;
@@ -17,10 +20,10 @@ export function runAllTasks<T>(
             const taskToRun = tasks[index]!;
 
             if (index < tasks.length) {
-                runningTasks[index] = taskToRun();
-                runningTasks[index].then(runPromise).catch(reject);
+                runningTasks[index] = taskToRun.start(signal);
+                runningTasks[index].then(runPromise, reject);
             } else if (index === tasks.length) {
-                Promise.all(runningTasks).then(resolve).catch(reject);
+                Promise.all(runningTasks).then(resolve, reject);
             }
         }
     });
