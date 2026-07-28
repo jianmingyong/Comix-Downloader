@@ -12,6 +12,8 @@
 // @run-at       document-start
 // @grant        GM_addStyle
 // @grant        GM_addElement
+// @grant        GM_getValue
+// @grant        GM_setValue
 // @grant        unsafeWindow
 // ==/UserScript==
 
@@ -60,7 +62,7 @@
   ));
 
   // src/constants.ts
-  var DEFAULT_WAIT_TIMEOUT, DEFAULT_FETCH_TIMEOUT, DEFAULT_MAX_RETRY, RETRY_WAIT_TIME, CHAPTER_DOWNLOAD_CONCURRENCY, PAGE_DOWNLOAD_CONCURRENCY, AsyncFunction, MAX_ZIP_SIZE;
+  var DEFAULT_WAIT_TIMEOUT, DEFAULT_FETCH_TIMEOUT, DEFAULT_MAX_RETRY, RETRY_WAIT_TIME, AsyncFunction;
   var init_constants = __esm({
     "src/constants.ts"() {
       "use strict";
@@ -68,11 +70,8 @@
       DEFAULT_FETCH_TIMEOUT = 30 * 1e3;
       DEFAULT_MAX_RETRY = 5;
       RETRY_WAIT_TIME = 5 * 1e3;
-      CHAPTER_DOWNLOAD_CONCURRENCY = 4;
-      PAGE_DOWNLOAD_CONCURRENCY = 12;
       AsyncFunction = async function() {
       }.constructor;
-      MAX_ZIP_SIZE = 5 * 1024 * 1024 * 1024;
     }
   });
 
@@ -27179,6 +27178,33 @@
     }
   });
 
+  // src/storage-extensions.ts
+  async function cleanUpOPFS() {
+    const opfsDirectory = await navigator.storage.getDirectory();
+    for await (const [key, value] of opfsDirectory.entries()) {
+      if (!key.endsWith(".cbz") && !key.endsWith(".zip")) continue;
+      if (value instanceof FileSystemFileHandle) {
+        await opfsDirectory.removeEntry(key);
+      }
+    }
+  }
+  async function getOPFSFileHandle(name) {
+    const opfsDirectory = await navigator.storage.getDirectory();
+    const fileHandle = await opfsDirectory.getFileHandle(
+      sanitizeFilename(name),
+      {
+        create: true
+      }
+    );
+    return fileHandle;
+  }
+  var init_storage_extensions = __esm({
+    "src/storage-extensions.ts"() {
+      "use strict";
+      init_file_extensions();
+    }
+  });
+
   // node_modules/react/cjs/react-jsx-runtime.development.js
   var require_react_jsx_runtime_development = __commonJS({
     "node_modules/react/cjs/react-jsx-runtime.development.js"(exports) {
@@ -27448,7 +27474,7 @@
     }
   });
 
-  // src/downloader-ui/comix-downloader-window.tsx
+  // src/comix-downloader-window.tsx
   function useComixChapterList(api) {
     const [chapterList, setChapterList] = (0, import_react.useState)();
     (0, import_react.useEffect)(() => {
@@ -27478,8 +27504,13 @@
     }, [api]);
     return chapterList;
   }
-  function createComixDownloadTask(api, chapter, progressCallback) {
-    return new ComixDownloadTask(api, chapter, progressCallback);
+  function createComixDownloadTask(api, chapter, pageDownloadConcurrency, progressCallback) {
+    return new ComixDownloadTask(
+      api,
+      chapter,
+      pageDownloadConcurrency,
+      progressCallback
+    );
   }
   function ComixDownloaderWindow({
     api,
@@ -27487,9 +27518,7 @@
     onClose
   }) {
     const chapterList = useComixChapterList(api);
-    const [selectedGroups, setSelectedGroups] = (0, import_react.useState)(
-      /* @__PURE__ */ new Set()
-    );
+    const [selectedGroups, setSelectedGroups] = (0, import_react.useState)(/* @__PURE__ */ new Set());
     const [selectedChapterRange, setSelectedChapterRange] = (0, import_react.useState)({ min: 0, max: 0 });
     const { groups, minChapterValue, maxChapterValue } = (0, import_react.useMemo)(() => {
       if (!chapterList) {
@@ -27515,6 +27544,18 @@
         };
       }
     }, [chapterList]);
+    const [pageDownloadConcurrecy, setPageDownloadConcurrency] = (0, import_react.useState)(
+      GM_getValue(
+        "ComixDownloaderPageDownloadConcurrency",
+        navigator.hardwareConcurrency
+      )
+    );
+    (0, import_react.useEffect)(() => {
+      GM_setValue(
+        "ComixDownloaderPageDownloadConcurrency",
+        pageDownloadConcurrecy
+      );
+    }, [pageDownloadConcurrecy]);
     const [isDownloading, setIsDownloading] = (0, import_react.useState)(false);
     const chaptersToDownload = (0, import_react.useMemo)(() => {
       if (!chapterList) {
@@ -27538,69 +27579,90 @@
       );
     }, [progress]);
     function onclickDownload() {
-      setIsDownloading(true);
-      const tasks = [];
-      const progress2 = {};
-      chaptersToDownload?.forEach((chapter) => {
-        const id = chapter.id;
-        progress2[id] = { done: 0, total: 0 };
-        tasks.push(
-          createComixDownloadTask(api, chapter, (progress3) => {
-            setProgress((prev) => {
-              return {
-                ...prev,
-                [id]: {
-                  done: progress3.done,
-                  total: progress3.total
-                }
-              };
-            });
-          })
-        );
-      });
-      setProgress(progress2);
-      runAllTasks(tasks, CHAPTER_DOWNLOAD_CONCURRENCY, signal).then(async (fileHandles) => {
-        const opfsDirectory = await navigator.storage.getDirectory();
-        const title = document.querySelector("h1.mpage__title")?.textContent;
-        let fileHandle = await opfsDirectory.getFileHandle(
-          sanitizeFilename(`${title}.zip`),
-          {
-            create: true
-          }
-        );
-        let writableFileStream = await fileHandle.createWritable({
-          keepExistingData: false
+      async function onClickDownloadAsync() {
+        setIsDownloading(true);
+        const tasks = [];
+        const progress2 = {};
+        chaptersToDownload?.forEach((chapter) => {
+          const id = chapter.id;
+          progress2[id] = { done: 0, total: 0, isError: false };
+          tasks.push(
+            createComixDownloadTask(
+              api,
+              chapter,
+              pageDownloadConcurrecy,
+              (progress3) => {
+                setProgress((prev) => {
+                  return {
+                    ...prev,
+                    [id]: {
+                      done: progress3.done,
+                      total: progress3.total,
+                      isError: progress3.isError
+                    }
+                  };
+                });
+              }
+            )
+          );
         });
-        let zipWriter = new ZipWriter(
-          writableFileStream,
-          {
-            compressionMethod: 8,
-            level: 9
-          }
-        );
-        for (const fileHandle2 of fileHandles) {
-          const file2 = await fileHandle2.getFile();
-          await zipWriter.add(fileHandle2.name, file2.stream());
-        }
-        await zipWriter.close();
-        const file = await fileHandle.getFile();
-        saveAs(sanitizeFilename(`${title}.zip`), file);
-        for (const fileHandle2 of fileHandles) {
-          await opfsDirectory.removeEntry(fileHandle2.name);
-        }
-        await opfsDirectory.removeEntry(fileHandle.name);
-      }).catch(console.log).finally(() => {
-        async function cleanUp() {
-          const opfsDirectory = await navigator.storage.getDirectory();
-          for await (let [key, value] of opfsDirectory.entries()) {
-            if (!key.endsWith(".cbz") && !key.endsWith(".zip"))
-              continue;
-            if (value instanceof FileSystemFileHandle) {
-              await opfsDirectory.removeEntry(key);
+        setProgress(progress2);
+        let estimateFileSize = 0;
+        let maxFileSize = Math.min(5 * 1024 * 1024 * 1024);
+        let fileHandles = [];
+        let part = 1;
+        for (const task of tasks) {
+          try {
+            const fileHandle = await task.start(signal);
+            const file = await fileHandle.getFile();
+            estimateFileSize += file.size;
+            fileHandles.push(fileHandle);
+            if (estimateFileSize >= maxFileSize) {
+              await createDownloadFile(fileHandles, part++);
+              fileHandles = [];
+              estimateFileSize = 0;
             }
+          } catch (error) {
           }
         }
-        cleanUp().catch((error) => console.log(error));
+        if (fileHandles.length > 0) {
+          if (part === 1) {
+            await createDownloadFile(fileHandles);
+          } else {
+            await createDownloadFile(fileHandles, part);
+          }
+        }
+        async function createDownloadFile(fileHandles2, part2) {
+          const title = document.querySelector("h1.mpage__title")?.textContent;
+          let fileHandle = await getOPFSFileHandle(
+            part2 ? `${title} Part ${part2}.zip` : `${title}.zip`
+          );
+          let writableFileStream = await fileHandle.createWritable({
+            keepExistingData: false
+          });
+          let zipWriter = new ZipWriter(
+            writableFileStream,
+            {
+              compressionMethod: 8,
+              level: 9
+            }
+          );
+          for (const fileHandle2 of fileHandles2) {
+            const file2 = await fileHandle2.getFile();
+            await zipWriter.add(fileHandle2.name, file2.stream());
+          }
+          await zipWriter.close();
+          const file = await fileHandle.getFile();
+          saveAs(fileHandle.name, file);
+          const opfsDirectory = await navigator.storage.getDirectory();
+          for (const fileHandle2 of fileHandles2) {
+            await opfsDirectory.removeEntry(fileHandle2.name);
+          }
+          await opfsDirectory.removeEntry(fileHandle.name);
+        }
+      }
+      onClickDownloadAsync().catch(console.log).finally(() => {
+        cleanUpOPFS().catch(console.log);
         setIsDownloading(false);
       });
     }
@@ -27769,6 +27831,57 @@
           }
         )
       ] }) }),
+      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("section", { style: { marginTop: "1rem" }, children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("fieldset", { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("legend", { children: "Download Setting(s):" }),
+        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+          "div",
+          {
+            style: {
+              display: "flex",
+              flexDirection: "row",
+              flexWrap: "wrap",
+              gap: "1rem"
+            },
+            children: /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  flexDirection: "row",
+                  flexWrap: "nowrap",
+                  gap: "1rem"
+                },
+                children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                    "label",
+                    {
+                      htmlFor: "comix-downloader-page-download-concurrency",
+                      children: "Page Download Concurrency:"
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+                    "input",
+                    {
+                      id: "comix-downloader-page-download-concurrency",
+                      type: "number",
+                      min: 1,
+                      max: 256,
+                      value: pageDownloadConcurrecy,
+                      disabled: isDownloading,
+                      style: { width: "100px" },
+                      onChange: (event) => {
+                        setPageDownloadConcurrency(
+                          event.target.valueAsNumber
+                        );
+                      }
+                    }
+                  )
+                ]
+              }
+            )
+          }
+        )
+      ] }) }),
       /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(
         "section",
         {
@@ -27777,7 +27890,8 @@
             display: "flex",
             flexDirection: "row",
             flexWrap: "wrap",
-            gap: "1rem"
+            gap: "1rem",
+            alignItems: "center"
           },
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
@@ -27789,7 +27903,7 @@
                 children: "Download"
               }
             ),
-            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Warning: Selecting a large range may fail due to JS limitations." })
+            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Warning: You may receive multiple download prompts if file size exceed 5GB in total." })
           ]
         }
       ),
@@ -27861,6 +27975,7 @@
               ) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
                 "progress",
                 {
+                  className: progress[chapter.id]?.isError ? "comix-downloader-progress-error" : "",
                   style: {
                     width: "100%"
                   },
@@ -27876,13 +27991,14 @@
   }
   var import_react, import_jsx_runtime, ComixChapter, ComixDownloadTask, ComixPageDownloadTask;
   var init_comix_downloader_window = __esm({
-    "src/downloader-ui/comix-downloader-window.tsx"() {
+    "src/comix-downloader-window.tsx"() {
       "use strict";
       import_react = __toESM(require_react());
       init_task_extensions();
       init_constants();
       init_file_extensions();
       init_zip();
+      init_storage_extensions();
       import_jsx_runtime = __toESM(require_jsx_runtime());
       ComixChapter = class {
         item;
@@ -27932,12 +28048,14 @@
       ComixDownloadTask = class {
         api;
         chapter;
+        pageDownloadConcurrency;
         tasks = [];
         done = 0;
         progressCallback;
-        constructor(api, chapter, progressCallback) {
+        constructor(api, chapter, pageDownloadConcurrency, progressCallback) {
           this.api = api;
           this.chapter = chapter;
+          this.pageDownloadConcurrency = pageDownloadConcurrency;
           this.progressCallback = progressCallback;
         }
         async start(signal) {
@@ -27950,13 +28068,7 @@
             this.chapter.id,
             abortSignal
           );
-          const opfsDirectory = await navigator.storage.getDirectory();
-          const fileHandle = await opfsDirectory.getFileHandle(
-            this.chapter.outputFileName,
-            {
-              create: true
-            }
-          );
+          const fileHandle = await getOPFSFileHandle(this.chapter.outputFileName);
           const writableFileStream = await fileHandle.createWritable({
             keepExistingData: false
           });
@@ -27978,7 +28090,8 @@
                 () => {
                   this.progressCallback({
                     done: ++this.done,
-                    total: this.tasks.length
+                    total: this.tasks.length,
+                    isError: false
                   });
                 }
               )
@@ -27986,10 +28099,19 @@
           });
           this.progressCallback({
             done: 0,
-            total: this.tasks.length
+            total: this.tasks.length,
+            isError: false
           });
-          await runAllTasks(this.tasks, PAGE_DOWNLOAD_CONCURRENCY, signal);
-          await zipWriter.close();
+          try {
+            await runAllTasks(this.tasks, this.pageDownloadConcurrency, signal);
+            await zipWriter.close();
+          } catch (error) {
+            this.progressCallback({
+              done: this.tasks.length,
+              total: this.tasks.length,
+              isError: true
+            });
+          }
           return fileHandle;
         }
       };
@@ -28021,11 +28143,18 @@
                 const canvas = document.createElement("canvas");
                 canvas.width = this.item.width;
                 canvas.height = this.item.height;
-                const data = await this.api.descrambleImage(
+                let data = await this.api.descrambleImage(
                   this.item.url,
                   canvas,
                   abortSignal
                 );
+                if (this.isLast) {
+                  data = await this.api.removeBanner(
+                    data,
+                    this.item.width,
+                    this.item.height
+                  );
+                }
                 const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
                 await this.zipWriter.add(
                   outputFileName,
@@ -28164,6 +28293,9 @@
           );
           GM_addStyle(
             "#comix-downloader-window { width: 75%; height: 80vh; max-height: 80vh; overflow: auto; color: white; background: #333; border-radius: 10px; box-shadow: 0 15px 40px rgba(0, 0, 0, 0.35); padding: 1rem; position: relative; }"
+          );
+          GM_addStyle(
+            "progress.comix-downloader-progress-error { accent-color: red; }"
           );
         }
         api;
@@ -32257,6 +32389,7 @@
       init_comix_secure_module();
       init_constants();
       init_document_extensions();
+      init_storage_extensions();
       async function main() {
         let currentPath;
         function urlChanged() {
@@ -32282,6 +32415,7 @@
           src: "https://kit.fontawesome.com/e5e217aee3.js",
           crossorigin: "anonymous"
         });
+        await cleanUpOPFS();
         urlChanged();
         addEventListener("popstate", () => queueMicrotask(urlChanged));
         async function inject() {

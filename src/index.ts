@@ -3,6 +3,7 @@ import { ComixDownloader } from "./comix-downloader";
 import { ComixSecureModule } from "./comix-secure-module";
 import { DEFAULT_WAIT_TIMEOUT } from "./constants";
 import { createElement, querySelectorWaitUntil } from "./document-extensions";
+import { cleanUpOPFS } from "./storage-extensions";
 
 async function main(): Promise<void> {
     let currentPath: string;
@@ -36,6 +37,8 @@ async function main(): Promise<void> {
         src: "https://kit.fontawesome.com/e5e217aee3.js",
         crossorigin: "anonymous",
     });
+
+    await cleanUpOPFS();
 
     urlChanged();
     addEventListener("popstate", () => queueMicrotask(urlChanged));

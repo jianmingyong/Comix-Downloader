@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client";
-import { ComixDownloaderWindow } from "./downloader-ui/comix-downloader-window";
+import { ComixDownloaderWindow } from "./comix-downloader-window";
 import { createElement } from "./document-extensions";
 import type { ComixApi } from "./comix-api";
 
@@ -10,6 +10,9 @@ export class ComixDownloader {
         );
         GM_addStyle(
             "#comix-downloader-window { width: 75%; height: 80vh; max-height: 80vh; overflow: auto; color: white; background: #333; border-radius: 10px; box-shadow: 0 15px 40px rgba(0, 0, 0, 0.35); padding: 1rem; position: relative; }"
+        );
+        GM_addStyle(
+            "progress.comix-downloader-progress-error { accent-color: red; }"
         );
     }
 

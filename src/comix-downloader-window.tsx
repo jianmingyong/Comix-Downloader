@@ -1,22 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { runAllTasks, type ITask } from "../task-extensions";
-import {
-    CHAPTER_DOWNLOAD_CONCURRENCY,
-    DEFAULT_FETCH_TIMEOUT,
-    DEFAULT_MAX_RETRY,
-    PAGE_DOWNLOAD_CONCURRENCY,
-} from "../constants";
+import { runAllTasks, type ITask } from "./task-extensions";
+import { DEFAULT_FETCH_TIMEOUT, DEFAULT_MAX_RETRY } from "./constants";
 import {
     resolveFileExtensions,
     sanitizeFilename,
     saveAs,
-} from "../file-extensions";
+} from "./file-extensions";
 import { BlobReader, ZipWriter } from "@zip.js/zip.js";
-import type { ComixApi } from "../comix-api";
-import type {
-    ComixChapterItem,
-    ComixChapterPageItem,
-} from "../comix-api-model";
+import type { ComixApi } from "./comix-api";
+import type { ComixChapterItem, ComixChapterPageItem } from "./comix-api-model";
+import { cleanUpOPFS, getOPFSFileHandle } from "./storage-extensions";
 
 interface ChapterRange {
     min: number;
@@ -26,6 +19,7 @@ interface ChapterRange {
 interface Progress {
     done: number;
     total: number;
+    isError: boolean;
 }
 
 type ComixDownloadProgressCallback = (progress: Progress) => void;
@@ -97,6 +91,7 @@ class ComixChapter {
 class ComixDownloadTask implements ITask<FileSystemFileHandle> {
     private readonly api: ComixApi;
     private readonly chapter: ComixChapter;
+    private readonly pageDownloadConcurrency: number;
 
     private tasks: ComixPageDownloadTask[] = [];
     private done: number = 0;
@@ -106,10 +101,12 @@ class ComixDownloadTask implements ITask<FileSystemFileHandle> {
     public constructor(
         api: ComixApi,
         chapter: ComixChapter,
+        pageDownloadConcurrency: number,
         progressCallback: ComixDownloadProgressCallback
     ) {
         this.api = api;
         this.chapter = chapter;
+        this.pageDownloadConcurrency = pageDownloadConcurrency;
         this.progressCallback = progressCallback;
     }
 
@@ -128,13 +125,7 @@ class ComixDownloadTask implements ITask<FileSystemFileHandle> {
             abortSignal
         );
 
-        const opfsDirectory = await navigator.storage.getDirectory();
-        const fileHandle = await opfsDirectory.getFileHandle(
-            this.chapter.outputFileName,
-            {
-                create: true,
-            }
-        );
+        const fileHandle = await getOPFSFileHandle(this.chapter.outputFileName);
         const writableFileStream = await fileHandle.createWritable({
             keepExistingData: false,
         });
@@ -158,6 +149,7 @@ class ComixDownloadTask implements ITask<FileSystemFileHandle> {
                         this.progressCallback({
                             done: ++this.done,
                             total: this.tasks.length,
+                            isError: false,
                         });
                     }
                 )
@@ -167,10 +159,19 @@ class ComixDownloadTask implements ITask<FileSystemFileHandle> {
         this.progressCallback({
             done: 0,
             total: this.tasks.length,
+            isError: false,
         });
 
-        await runAllTasks(this.tasks, PAGE_DOWNLOAD_CONCURRENCY, signal);
-        await zipWriter.close();
+        try {
+            await runAllTasks(this.tasks, this.pageDownloadConcurrency, signal);
+            await zipWriter.close();
+        } catch (error) {
+            this.progressCallback({
+                done: this.tasks.length,
+                total: this.tasks.length,
+                isError: true,
+            });
+        }
 
         return fileHandle;
     }
@@ -220,11 +221,19 @@ class ComixPageDownloadTask implements ITask<void> {
                     canvas.width = this.item.width;
                     canvas.height = this.item.height;
 
-                    const data = await this.api.descrambleImage(
+                    let data = await this.api.descrambleImage(
                         this.item.url,
                         canvas,
                         abortSignal
                     );
+
+                    if (this.isLast) {
+                        data = await this.api.removeBanner(
+                            data,
+                            this.item.width,
+                            this.item.height
+                        );
+                    }
 
                     const outputFileName = `${String(this.index).padStart(3, "0")}.png`;
                     await this.zipWriter.add(
@@ -317,9 +326,15 @@ function useComixChapterList(api: ComixApi) {
 function createComixDownloadTask(
     api: ComixApi,
     chapter: ComixChapter,
+    pageDownloadConcurrency: number,
     progressCallback: ComixDownloadProgressCallback
 ) {
-    return new ComixDownloadTask(api, chapter, progressCallback);
+    return new ComixDownloadTask(
+        api,
+        chapter,
+        pageDownloadConcurrency,
+        progressCallback
+    );
 }
 
 export function ComixDownloaderWindow({
@@ -333,9 +348,7 @@ export function ComixDownloaderWindow({
 }) {
     const chapterList = useComixChapterList(api);
 
-    const [selectedGroups, setSelectedGroups] = useState<Set<string>>(
-        new Set()
-    );
+    const [selectedGroups, setSelectedGroups] = useState(new Set<string>());
     const [selectedChapterRange, setSelectedChapterRange] =
         useState<ChapterRange>({ min: 0, max: 0 });
 
@@ -367,6 +380,20 @@ export function ComixDownloaderWindow({
             };
         }
     }, [chapterList]);
+
+    const [pageDownloadConcurrecy, setPageDownloadConcurrency] = useState(
+        GM_getValue(
+            "ComixDownloaderPageDownloadConcurrency",
+            navigator.hardwareConcurrency
+        )
+    );
+
+    useEffect(() => {
+        GM_setValue(
+            "ComixDownloaderPageDownloadConcurrency",
+            pageDownloadConcurrecy
+        );
+    }, [pageDownloadConcurrecy]);
 
     const [isDownloading, setIsDownloading] = useState(false);
 
@@ -402,42 +429,78 @@ export function ComixDownloaderWindow({
     }, [progress]);
 
     function onclickDownload() {
-        setIsDownloading(true);
+        async function onClickDownloadAsync() {
+            setIsDownloading(true);
 
-        const tasks: ComixDownloadTask[] = [];
-        const progress: Record<number, Progress> = {};
+            const tasks: ComixDownloadTask[] = [];
+            const progress: Record<number, Progress> = {};
 
-        chaptersToDownload?.forEach((chapter) => {
-            const id = chapter.id;
-            progress[id] = { done: 0, total: 0 };
+            chaptersToDownload?.forEach((chapter) => {
+                const id = chapter.id;
+                progress[id] = { done: 0, total: 0, isError: false };
 
-            tasks.push(
-                createComixDownloadTask(api, chapter, (progress) => {
-                    setProgress((prev) => {
-                        return {
-                            ...prev,
-                            [id]: {
-                                done: progress.done,
-                                total: progress.total,
-                            },
-                        };
-                    });
-                })
-            );
-        });
+                tasks.push(
+                    createComixDownloadTask(
+                        api,
+                        chapter,
+                        pageDownloadConcurrecy,
+                        (progress) => {
+                            setProgress((prev) => {
+                                return {
+                                    ...prev,
+                                    [id]: {
+                                        done: progress.done,
+                                        total: progress.total,
+                                        isError: progress.isError,
+                                    },
+                                };
+                            });
+                        }
+                    )
+                );
+            });
 
-        setProgress(progress);
+            setProgress(progress);
 
-        runAllTasks(tasks, CHAPTER_DOWNLOAD_CONCURRENCY, signal)
-            .then(async (fileHandles) => {
-                const opfsDirectory = await navigator.storage.getDirectory();
+            let estimateFileSize = 0;
+            let maxFileSize = Math.min(5 * 1024 * 1024 * 1024);
+            let fileHandles: FileSystemFileHandle[] = [];
+            let part = 1;
+
+            for (const task of tasks) {
+                try {
+                    const fileHandle = await task.start(signal);
+                    const file = await fileHandle.getFile();
+                    estimateFileSize += file.size;
+                    fileHandles.push(fileHandle);
+
+                    if (estimateFileSize >= maxFileSize) {
+                        await createDownloadFile(fileHandles, part++);
+                        fileHandles = [];
+                        estimateFileSize = 0;
+                    }
+                } catch (error) {
+                    // Error downloading that file for some reason...
+                    // We skip that.
+                }
+            }
+
+            if (fileHandles.length > 0) {
+                if (part === 1) {
+                    await createDownloadFile(fileHandles);
+                } else {
+                    await createDownloadFile(fileHandles, part);
+                }
+            }
+
+            async function createDownloadFile(
+                fileHandles: FileSystemFileHandle[],
+                part?: number
+            ) {
                 const title =
                     document.querySelector("h1.mpage__title")?.textContent;
-                let fileHandle = await opfsDirectory.getFileHandle(
-                    sanitizeFilename(`${title}.zip`),
-                    {
-                        create: true,
-                    }
+                let fileHandle = await getOPFSFileHandle(
+                    part ? `${title} Part ${part}.zip` : `${title}.zip`
                 );
                 let writableFileStream = await fileHandle.createWritable({
                     keepExistingData: false,
@@ -456,32 +519,24 @@ export function ComixDownloaderWindow({
                 }
 
                 await zipWriter.close();
+
                 const file = await fileHandle.getFile();
-                saveAs(sanitizeFilename(`${title}.zip`), file);
+                saveAs(fileHandle.name, file);
+
+                const opfsDirectory = await navigator.storage.getDirectory();
 
                 for (const fileHandle of fileHandles) {
                     await opfsDirectory.removeEntry(fileHandle.name);
                 }
 
                 await opfsDirectory.removeEntry(fileHandle.name);
-            })
+            }
+        }
+
+        onClickDownloadAsync()
             .catch(console.log)
             .finally(() => {
-                async function cleanUp() {
-                    const opfsDirectory =
-                        await navigator.storage.getDirectory();
-
-                    for await (let [key, value] of opfsDirectory.entries()) {
-                        if (!key.endsWith(".cbz") && !key.endsWith(".zip"))
-                            continue;
-
-                        if (value instanceof FileSystemFileHandle) {
-                            await opfsDirectory.removeEntry(key);
-                        }
-                    }
-                }
-
-                cleanUp().catch((error) => console.log(error));
+                cleanUpOPFS().catch(console.log);
                 setIsDownloading(false);
             });
     }
@@ -639,6 +694,52 @@ export function ComixDownloaderWindow({
                     </div>
                 </fieldset>
             </section>
+            <section style={{ marginTop: "1rem" }}>
+                <fieldset>
+                    <legend>Download Setting(s):</legend>
+                    <div
+                        style={{
+                            display: "flex",
+                            flexDirection: "row",
+                            flexWrap: "wrap",
+                            gap: "1rem",
+                        }}
+                    >
+                        <div
+                            style={{
+                                display: "flex",
+                                flexDirection: "row",
+                                flexWrap: "nowrap",
+                                gap: "1rem",
+                            }}
+                        >
+                            <label
+                                htmlFor={
+                                    "comix-downloader-page-download-concurrency"
+                                }
+                            >
+                                Page Download Concurrency:
+                            </label>
+                            <input
+                                id={
+                                    "comix-downloader-page-download-concurrency"
+                                }
+                                type={"number"}
+                                min={1}
+                                max={256}
+                                value={pageDownloadConcurrecy}
+                                disabled={isDownloading}
+                                style={{ width: "100px" }}
+                                onChange={(event) => {
+                                    setPageDownloadConcurrency(
+                                        event.target.valueAsNumber
+                                    );
+                                }}
+                            />
+                        </div>
+                    </div>
+                </fieldset>
+            </section>
             <section
                 style={{
                     marginTop: "1rem",
@@ -646,6 +747,7 @@ export function ComixDownloaderWindow({
                     flexDirection: "row",
                     flexWrap: "wrap",
                     gap: "1rem",
+                    alignItems: "center",
                 }}
             >
                 <button
@@ -661,8 +763,8 @@ export function ComixDownloaderWindow({
                     Download
                 </button>
                 <span>
-                    Warning: Selecting a large range may fail due to JS
-                    limitations.
+                    Warning: You may receive multiple download prompts if file
+                    size exceed 5GB in total.
                 </span>
             </section>
             <section style={{ marginTop: "1rem" }}>
@@ -731,6 +833,13 @@ export function ComixDownloaderWindow({
                                                         />
                                                     ) : (
                                                         <progress
+                                                            className={
+                                                                progress[
+                                                                    chapter.id
+                                                                ]?.isError
+                                                                    ? "comix-downloader-progress-error"
+                                                                    : ""
+                                                            }
                                                             style={{
                                                                 width: "100%",
                                                             }}
