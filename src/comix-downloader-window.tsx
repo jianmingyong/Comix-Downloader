@@ -171,6 +171,8 @@ class ComixDownloadTask implements ITask<FileSystemFileHandle> {
                 total: this.tasks.length,
                 isError: true,
             });
+
+            throw error;
         }
 
         return fileHandle;
@@ -463,7 +465,7 @@ export function ComixDownloaderWindow({
             setProgress(progress);
 
             let estimateFileSize = 0;
-            let maxFileSize = Math.min(5 * 1024 * 1024 * 1024);
+            let maxFileSize = Math.min(2 * 1024 * 1024 * 1024);
             let fileHandles: FileSystemFileHandle[] = [];
             let part = 1;
 
@@ -764,7 +766,7 @@ export function ComixDownloaderWindow({
                 </button>
                 <span>
                     Warning: You may receive multiple download prompts if file
-                    size exceed 5GB in total.
+                    size exceed 2GB in total.
                 </span>
             </section>
             <section style={{ marginTop: "1rem" }}>
