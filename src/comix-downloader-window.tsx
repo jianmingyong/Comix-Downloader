@@ -132,6 +132,7 @@ class ComixDownloadTask implements ITask<FileSystemFileHandle> {
         const zipWriter = new ZipWriter<FileSystemWritableFileStream>(
             writableFileStream,
             {
+                bufferedWrite: true,
                 compressionMethod: 8,
                 level: 9,
             }
@@ -291,10 +292,9 @@ function useComixChapterList(api: ComixApi) {
 
     useEffect(() => {
         async function getChapterList(): Promise<ComixChapter[]> {
-            const mangaId = document.URL.replace(
-                "https://comix.to/title/",
-                ""
-            ).split("-")[0]!;
+            const mangaId = location.pathname
+                .replace("/title/", "")
+                .split("-")[0]!;
 
             const chapterList: ComixChapter[] = [];
 
@@ -367,6 +367,8 @@ export function ComixDownloaderWindow({
             chapterList.forEach((chapter) => {
                 if (chapter.group) {
                     groups.add(chapter.group);
+                } else {
+                    groups.add("No Group");
                 }
             });
 
@@ -407,7 +409,7 @@ export function ComixDownloaderWindow({
                 (chapter) =>
                     (chapter.group
                         ? selectedGroups.has(chapter.group)
-                        : false) &&
+                        : selectedGroups.has("No Group")) &&
                     chapter.chapter >= selectedChapterRange.min &&
                     chapter.chapter <= selectedChapterRange.max
             );
