@@ -119,7 +119,7 @@ export class ComixSecureModule {
         if (!foundInterceptors) {
             throw new Error("Unable to find interceptor function");
         } else if (this.descrambler.length === 0) {
-            throw new Error("Unable to find descrambler function");
+            console.log("Unable to find descrambler function");
         }
 
         console.log(

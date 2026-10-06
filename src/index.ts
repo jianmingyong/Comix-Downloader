@@ -45,10 +45,10 @@ async function main(): Promise<void> {
 
     async function inject(): Promise<void> {
         const rateElement = (await querySelectorWaitUntil<HTMLDivElement>(
-            "div.mpage__poster-actions",
+            "div.mpage__actions",
             (element) =>
                 element
-                    ? element.querySelector("div.mpage__rate-stack")
+                    ? element.querySelector("div.mpage__collect")
                         ? true
                         : false
                     : false,
@@ -77,7 +77,7 @@ async function main(): Promise<void> {
                         }),
                     ],
                 }),
-                rateElement.querySelector("div.mpage__rate-stack")
+                document.querySelector("div.mpage__actions-aux")
             );
         }
     }

@@ -246,6 +246,7 @@ class ComixPageDownloadTask implements ITask<void> {
                 } else {
                     // Unscrambled Pages
                     const response = await fetch(this.item.url, {
+                        referrerPolicy: "same-origin",
                         signal: abortSignal,
                     });
 
@@ -261,12 +262,14 @@ class ComixPageDownloadTask implements ITask<void> {
                     );
 
                     if (this.isLast) {
+                        /*
                         blob = await this.api.removeBanner(
                             blob,
                             this.item.width,
                             this.item.height
                         );
                         fileExtensions = "png";
+                        */
                     }
 
                     const outputFileName = `${String(this.index).padStart(3, "0")}.${fileExtensions}`;
